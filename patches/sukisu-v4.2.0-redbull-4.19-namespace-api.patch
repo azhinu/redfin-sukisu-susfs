@@ -1,0 +1,73 @@
+diff --git a/kernel/feature/kernel_umount.c b/kernel/feature/kernel_umount.c
+--- a/kernel/feature/kernel_umount.c
++++ b/kernel/feature/kernel_umount.c
+@@ -41,14 +41,14 @@
+     .set_handler = kernel_umount_feature_set,
+ };
+ 
+-extern int path_umount(struct path *path, int flags);
++extern int ksu_path_umount(struct path *path, int flags);
+ 
+ static void ksu_umount_mnt(const char *mnt, struct path *path, int flags)
+ {
+-    int err = path_umount(path, flags);
+-    if (err) {
+-        pr_info("umount %s failed: %d\n", mnt, err);
+-    }
++	int err = ksu_path_umount(path, flags);
++	if (err) {
++		pr_info("Umount %s failed: %d\n", mnt, err);
++	}
+ }
+ 
+ static void try_umount(const char *mnt, int flags)
+diff --git a/kernel/infra/su_mount_ns.c b/kernel/infra/su_mount_ns.c
+--- a/kernel/infra/su_mount_ns.c
++++ b/kernel/infra/su_mount_ns.c
+@@ -19,9 +19,17 @@
+ #include "infra/su_mount_ns.h"
+ #include "util.h"
+ 
+-extern int path_mount(const char *dev_name, struct path *path, const char *type_page, unsigned long flags,
+-                      void *data_page);
++extern int ksu_path_mount(const char *dev_name, struct path *path,
++			  const char *type_page, unsigned long flags,
++			  void *data_page);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
++extern long ksu_setns(int fd, int nstype);
+ 
++static long ksu_sys_setns(int fd, int flags)
++{
++	return ksu_setns(fd, flags);
++}
++#else
+ #if defined(__aarch64__)
+ extern long __arm64_sys_setns(const struct pt_regs *regs);
+ #elif defined(__x86_64__)
+@@ -44,6 +52,7 @@
+ #error "Unsupported arch"
+ #endif
+ }
++#endif
+ 
+ // global mode , need CAP_SYS_ADMIN and CAP_SYS_CHROOT to perform setns
+ static void ksu_mnt_ns_global(void)
+@@ -146,12 +155,13 @@
+     // make root mount private
+     struct path root_path;
+     get_fs_root(current->fs, &root_path);
+-    int pm_ret = path_mount(NULL, &root_path, NULL, MS_PRIVATE | MS_REC, NULL);
+-    path_put(&root_path);
++	int pm_ret = ksu_path_mount(NULL, &root_path, NULL, MS_PRIVATE | MS_REC,
++				    NULL);
++	path_put(&root_path);
+ 
+-    if (pm_ret < 0) {
+-        pr_err("failed to make root private, err: %d\n", pm_ret);
+-    }
++	if (pm_ret < 0) {
++		pr_err("Failed to make root private, err: %d\n", pm_ret);
++	}
+ }
+ 
+ void setup_mount_ns(int32_t ns_mode)

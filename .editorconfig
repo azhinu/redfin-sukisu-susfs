@@ -1,0 +1,29 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.py]
+indent_size = 4
+
+[{*.c,*.h,*.go}]
+indent_style = tab
+indent_size = 8
+tab_width = 8
+
+[{Makefile,.gitmodules}]
+indent_style = tab
+indent_size = 8
+tab_width = 8
+
+[*.patch]
+# A blank context line in a unified diff must retain its leading space.
+indent_style = tab
+indent_size = 8
+tab_width = 8
+trim_trailing_whitespace = false

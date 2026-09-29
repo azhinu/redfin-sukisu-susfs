@@ -1,0 +1,27 @@
+diff --git a/kernel/infra/file_wrapper.c b/kernel/infra/file_wrapper.c
+--- a/kernel/infra/file_wrapper.c
++++ b/kernel/infra/file_wrapper.c
+@@ -514,11 +514,11 @@
+ 	error = security_inode_init_security_anon(inode, &qname, context_inode);
+ #else
+ 	/* Linux 4.19 has no anon-inode LSM hook or class; retain its file class. */
+-	isec = inode->i_security;
++	isec = selinux_inode(inode);
+ 	if (!isec || !selinux_state.initialized) {
+ 		error = 0;
+ 	} else if (context_inode) {
+-		context_isec = context_inode->i_security;
++		context_isec = selinux_inode(context_inode);
+ 		if (!context_isec ||
+ 		    context_isec->initialized != LABEL_INITIALIZED) {
+ 			error = -EACCES;
+@@ -630,7 +630,8 @@
+ 	struct inode_security_struct *wrapper_sec =
+ 		selinux_inode(wrapper_inode);
+ #else
+-	struct inode_security_struct *wrapper_sec = wrapper_inode->i_security;
++	struct inode_security_struct *wrapper_sec =
++		selinux_inode(wrapper_inode);
+ #endif
+ 	// Use ksu_file_sid to bypass SELinux check.
+ 	// When we call `su` from terminal app, this is useful.

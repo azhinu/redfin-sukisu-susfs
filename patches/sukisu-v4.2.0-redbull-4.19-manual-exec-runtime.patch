@@ -1,0 +1,59 @@
+diff --git a/kernel/core/init.c b/kernel/core/init.c
+--- a/kernel/core/init.c
++++ b/kernel/core/init.c
+@@ -204,6 +204,9 @@
+ #endif
+ 
+ 		ksu_file_wrapper_init();
++#ifdef CONFIG_KSU_MANUAL_HOOK
++		ksu_manual_execveat_enable();
++#endif
+ 	}
+ 
+ #ifdef MODULE
+diff --git a/kernel/runtime/ksud.h b/kernel/runtime/ksud.h
+--- a/kernel/runtime/ksud.h
++++ b/kernel/runtime/ksud.h
+@@ -8,6 +8,9 @@
+ void ksu_ksud_init();
+ void ksu_ksud_exit();
+ 
++void ksu_manual_execveat_enable(void);
++void ksu_manual_execveat(const char *path,
++			 const char __user *const __user *argv_user);
+ void ksu_execve_hook_ksud(const struct pt_regs *regs);
+ void ksu_execveat_hook_ksud(const struct pt_regs *regs);
+ void ksu_stop_input_hook_runtime(void);
+diff --git a/kernel/runtime/ksud_integration.c b/kernel/runtime/ksud_integration.c
+--- a/kernel/runtime/ksud_integration.c
++++ b/kernel/runtime/ksud_integration.c
+@@ -551,6 +551,29 @@
+     ksu_handle_execveat_ksud(path, &argv);
+ }
+ 
++static bool ksu_manual_execve_ready;
++
++void ksu_manual_execveat_enable(void)
++{
++	WRITE_ONCE(ksu_manual_execve_ready, true);
++}
++
++void ksu_manual_execveat(const char *path,
++			 const char __user *const __user *argv_user)
++{
++	struct user_arg_ptr argv = {.ptr.native = argv_user};
++	char path_copy[32];
++
++	if (!READ_ONCE(ksu_manual_execve_ready) || !path)
++		return;
++	if (strscpy(path_copy, path, sizeof(path_copy)) < 0)
++		return;
++	if (strncmp(path_copy, "/system/bin/app_process",
++		    sizeof("/system/bin/app_process") - 1) != 0)
++		return;
++	ksu_handle_execveat_ksud(path_copy, &argv);
++}
++
+ void ksu_execve_hook_ksud(const struct pt_regs *regs)
+ {
+     const char __user *filename_user = (const char __user *)PT_REGS_PARM1(regs);

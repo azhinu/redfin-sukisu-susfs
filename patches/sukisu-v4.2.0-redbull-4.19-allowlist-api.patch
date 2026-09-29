@@ -1,0 +1,42 @@
+diff --git a/kernel/policy/allowlist.c b/kernel/policy/allowlist.c
+--- a/kernel/policy/allowlist.c
++++ b/kernel/policy/allowlist.c
+@@ -1,4 +1,5 @@
+ #include <linux/rcupdate.h>
++#include <linux/sched/task.h>
+ #include <linux/limits.h>
+ #include <linux/rculist.h>
+ #include <linux/mutex.h>
+@@ -469,10 +470,10 @@
+         goto put_task;
+     }
+     cb->func = do_persistent_allow_list;
+-    if (task_work_add(tsk, cb, TWA_RESUME)) {
+-        kfree(cb);
+-        pr_warn("save_allow_list add task_work failed\n");
+-    }
++	if (task_work_add(tsk, cb, true)) {
++		kfree(cb);
++		pr_warn("Save_allow_list add task_work failed\n");
++	}
+ 
+ put_task:
+     put_task_struct(tsk);
+@@ -492,11 +493,12 @@
+                 pr_info("migrated domain of profile: %s\n", profile->key);
+             }
+         }
+-        fallthrough;
+-    case 3:
+-        if (profile->allow_su) {
+-            profile->rp_config.profile.flags = FLAG_KSU_NO_NEW_PRIVS;
+-        }
++		/* fall through */
++	case 3:
++		if (profile->allow_su) {
++			profile->rp_config.profile.flags =
++				FLAG_KSU_NO_NEW_PRIVS;
++		}
+         break;
+     }
+ 

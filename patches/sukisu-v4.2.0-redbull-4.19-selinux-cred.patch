@@ -1,0 +1,19 @@
+diff --git a/kernel/selinux/selinux.c b/kernel/selinux/selinux.c
+--- a/kernel/selinux/selinux.c
++++ b/kernel/selinux/selinux.c
+@@ -5,6 +5,15 @@
+ #include "linux/version.h"
+ #include "klog.h" // IWYU pragma: keep
+ #include "ksu.h"
++
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 0)
++static inline struct task_security_struct *
++ksu_selinux_cred(const struct cred *cred)
++{
++	return cred->security;
++}
++#define selinux_cred ksu_selinux_cred
++#endif
+ 
+ /*
+  * Cached SID values for frequently checked contexts.

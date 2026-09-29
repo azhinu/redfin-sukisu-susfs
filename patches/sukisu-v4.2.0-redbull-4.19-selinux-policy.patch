@@ -1,0 +1,314 @@
+diff --git a/kernel/selinux/rules.c b/kernel/selinux/rules.c
+--- a/kernel/selinux/rules.c
++++ b/kernel/selinux/rules.c
+@@ -6,6 +6,9 @@
+ #include <linux/lockdep.h>
+ #include <linux/slab.h>
+ #include <linux/string.h>
++#include <linux/mutex.h>
++#include <linux/sizes.h>
++#include <linux/vmalloc.h>
+ 
+ #include "uapi/selinux.h"
+ #include "klog.h" // IWYU pragma: keep
+@@ -21,6 +24,90 @@
+ 
+ #define ALL NULL
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
++/* Serialize KernelSU policy edits; SELinux's policy_rwlock is a spinlock. */
++static DEFINE_MUTEX(ksu_legacy_policy_mutex);
++
++static struct selinux_policy *ksu_legacy_policy_snapshot(void)
++{
++	struct selinux_policy *policy;
++	struct policy_file fp;
++	void *data = NULL;
++	size_t len = 0;
++	int ret;
++
++	ret = security_read_policy(&selinux_state, &data, &len);
++	if (ret)
++		goto out_error;
++
++	policy = kzalloc(sizeof(*policy), GFP_KERNEL);
++	if (!policy) {
++		ret = -ENOMEM;
++		goto out_error;
++	}
++
++	fp.data = data;
++	fp.len = len;
++	ret = policydb_read(&policy->policydb, &fp);
++	if (ret) {
++		policydb_destroy(&policy->policydb);
++		kfree(policy);
++		goto out_error;
++	}
++	policy->policydb.len = len;
++	read_lock(&selinux_state.ss->policy_rwlock);
++	policy->latest_granting = selinux_state.ss->latest_granting;
++	policy->policydb.android_netlink_route =
++		selinux_state.ss->policydb.android_netlink_route;
++	policy->policydb.android_netlink_getneigh =
++		selinux_state.ss->policydb.android_netlink_getneigh;
++	read_unlock(&selinux_state.ss->policy_rwlock);
++	vfree(data);
++	return policy;
++
++out_error:
++	vfree(data);
++	return ERR_PTR(ret);
++}
++
++/* security_load_policy performs SID conversion, a short atomic swap, and AVC reset. */
++static int ksu_legacy_policy_commit(struct selinux_policy *policy)
++{
++	size_t size = policy->policydb.len + SZ_1M;
++	int ret;
++
++	while (size <= 64 * SZ_1M) {
++		struct policy_file fp;
++		void *data = vmalloc(size);
++
++		if (!data)
++			return -ENOMEM;
++		fp.data = data;
++		fp.len = size;
++		ret = policydb_write(&policy->policydb, &fp);
++		if (!ret) {
++			/* This 4.19 writer omits Android's netlink policy config bits. */
++			u32 *config = (u32 *)((u8 *)data + 20);
++			if (policy->policydb.android_netlink_route)
++				*config |=
++					POLICYDB_CONFIG_ANDROID_NETLINK_ROUTE;
++			if (policy->policydb.android_netlink_getneigh)
++				*config |=
++					POLICYDB_CONFIG_ANDROID_NETLINK_GETNEIGH;
++			ret = security_load_policy(&selinux_state, data,
++						   size - fp.len);
++			vfree(data);
++			return ret;
++		}
++		vfree(data);
++		if (ret != -EINVAL)
++			return ret;
++		size *= 2;
++	}
++	return -E2BIG;
++}
++#endif
++
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0))
+ extern int avc_ss_reset(u32 seqno);
+ #else
+@@ -44,20 +131,37 @@
+ 
+ void apply_kernelsu_rules()
+ {
+-    struct selinux_policy *pol, *old_pol = selinux_state.policy;
+-    struct policydb *db;
+-
+-    if (!getenforce()) {
+-        pr_info("SELinux permissive or disabled, apply rules!\n");
+-    }
+-
+-    mutex_lock(&selinux_state.policy_mutex);
+-    backup_sepolicy =
+-        ksu_dup_sepolicy(rcu_dereference_protected(old_pol, lockdep_is_held(&selinux_state.policy_mutex)));
+-    if (IS_ERR(backup_sepolicy)) {
+-        pr_err("failed to create backup sepolicy: %ld\n", PTR_ERR(backup_sepolicy));
+-        backup_sepolicy = NULL;
+-    } else {
++	struct selinux_policy *pol, *old_pol;
++	struct policydb *db;
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
++	mutex_lock(&ksu_legacy_policy_mutex);
++	old_pol = ksu_legacy_policy_snapshot();
++	if (IS_ERR(old_pol)) {
++		pr_err("Failed to read SELinux policy: %ld\n",
++		       PTR_ERR(old_pol));
++		mutex_unlock(&ksu_legacy_policy_mutex);
++		return;
++	}
++#else
++	old_pol = selinux_state.policy;
++#endif
++
++	if (!getenforce()) {
++		pr_info("SELinux permissive or disabled, apply rules!\n");
++	}
++
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
++	backup_sepolicy = ksu_dup_sepolicy(old_pol);
++#else
++	mutex_lock(&selinux_state.policy_mutex);
++	backup_sepolicy = ksu_dup_sepolicy(rcu_dereference_protected(
++		old_pol, lockdep_is_held(&selinux_state.policy_mutex)));
++#endif
++	if (IS_ERR(backup_sepolicy)) {
++		pr_err("Failed to create backup sepolicy: %ld\n",
++		       PTR_ERR(backup_sepolicy));
++		backup_sepolicy = NULL;
++	} else {
+         backup_sepolicy->sidtab = kzalloc(sizeof(*backup_sepolicy->sidtab), GFP_KERNEL);
+         if (!backup_sepolicy->sidtab) {
+             pr_err("failed to alloc backup sidtab\n");
+@@ -75,11 +179,16 @@
+             }
+         }
+     }
+-    pol = ksu_dup_sepolicy(rcu_dereference_protected(old_pol, lockdep_is_held(&selinux_state.policy_mutex)));
+-    if (IS_ERR(pol)) {
+-        pr_err("failed to dup selinux_policy: %ld\n", PTR_ERR(pol));
+-        goto out_unlock;
+-    }
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
++	pol = ksu_dup_sepolicy(old_pol);
++#else
++	pol = ksu_dup_sepolicy(rcu_dereference_protected(
++		old_pol, lockdep_is_held(&selinux_state.policy_mutex)));
++#endif
++	if (IS_ERR(pol)) {
++		pr_err("Failed to dup selinux_policy: %ld\n", PTR_ERR(pol));
++		goto out_unlock;
++	}
+ 
+     db = &pol->policydb;
+ 
+@@ -155,13 +264,28 @@
+     ksu_allow(db, "system_server", KERNEL_SU_DOMAIN, "process", "getpgid");
+     ksu_allow(db, "system_server", KERNEL_SU_DOMAIN, "process", "sigkill");
+ 
+-    rcu_assign_pointer(selinux_state.policy, pol);
+-    synchronize_rcu();
+-    ksu_destroy_sepolicy(old_pol);
+-
+-    reset_avc_cache();
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
++	{
++		int ret = ksu_legacy_policy_commit(pol);
++		if (ret)
++			pr_err("Failed to load KernelSU SELinux policy: %d\n",
++			       ret);
++		ksu_destroy_sepolicy(pol);
++	}
++#else
++	rcu_assign_pointer(selinux_state.policy, pol);
++	synchronize_rcu();
++	ksu_destroy_sepolicy(old_pol);
++
++	reset_avc_cache();
++#endif
+ out_unlock:
+-    mutex_unlock(&selinux_state.policy_mutex);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
++	ksu_destroy_sepolicy(old_pol);
++	mutex_unlock(&ksu_legacy_policy_mutex);
++#else
++	mutex_unlock(&selinux_state.policy_mutex);
++#endif
+ }
+ 
+ #define KSU_SEPOLICY_MAX_BATCH_SIZE (8U * 1024U * 1024U)
+@@ -461,14 +585,28 @@
+         pr_info("SELinux permissive or disabled when handle policy!\n");
+     }
+ 
+-    mutex_lock(&selinux_state.policy_mutex);
+-
+-    old_pol = selinux_state.policy;
+-    pol = ksu_dup_sepolicy(rcu_dereference_protected(old_pol, lockdep_is_held(&selinux_state.policy_mutex)));
+-    if (IS_ERR(pol)) {
+-        ret = PTR_ERR(pol);
+-        pr_err("ksu_dup_sepolicy err: %d\n", ret);
+-        goto out_unlock;
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
++	{
++		mutex_lock(&ksu_legacy_policy_mutex);
++		old_pol = ksu_legacy_policy_snapshot();
++		if (IS_ERR(old_pol)) {
++			ret = PTR_ERR(old_pol);
++			pr_err("Failed to read SELinux policy: %d\n", ret);
++			goto out_unlock;
++		}
++		pol = ksu_dup_sepolicy(old_pol);
++	}
++#else
++	mutex_lock(&selinux_state.policy_mutex);
++
++	old_pol = selinux_state.policy;
++	pol = ksu_dup_sepolicy(rcu_dereference_protected(
++		old_pol, lockdep_is_held(&selinux_state.policy_mutex)));
++#endif
++	if (IS_ERR(pol)) {
++		ret = PTR_ERR(pol);
++		pr_err("Ksu_dup_sepolicy err: %d\n", ret);
++		goto out_unlock;
+     }
+     db = &pol->policydb;
+ 
+@@ -514,18 +652,33 @@
+         cmd_index++;
+     }
+ 
+-    rcu_assign_pointer(selinux_state.policy, pol);
+-    synchronize_rcu();
+-    ksu_destroy_sepolicy(old_pol);
+-
+-    reset_avc_cache();
+-    ret = success_cmd_count;
+-    goto out_unlock;
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
++	ret = ksu_legacy_policy_commit(pol);
++	ksu_destroy_sepolicy(pol);
++	if (ret) {
++		pr_err("Failed to load KernelSU SELinux policy: %d\n", ret);
++		goto out_unlock;
++	}
++#else
++	rcu_assign_pointer(selinux_state.policy, pol);
++	synchronize_rcu();
++	ksu_destroy_sepolicy(old_pol);
++
++	reset_avc_cache();
++#endif
++	ret = success_cmd_count;
++	goto out_unlock;
+ 
+ out_drop_new_policy:
+     ksu_destroy_sepolicy(pol);
+ out_unlock:
+-    mutex_unlock(&selinux_state.policy_mutex);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
++	if (!IS_ERR(old_pol))
++		ksu_destroy_sepolicy(old_pol);
++	mutex_unlock(&ksu_legacy_policy_mutex);
++#else
++	mutex_unlock(&selinux_state.policy_mutex);
++#endif
+ out_free:
+     kvfree(payload);
+ 
+diff --git a/kernel/selinux/sepolicy.h b/kernel/selinux/sepolicy.h
+--- a/kernel/selinux/sepolicy.h
++++ b/kernel/selinux/sepolicy.h
+@@ -2,8 +2,18 @@
+ #define __KSU_H_SEPOLICY
+ 
+ #include <linux/types.h>
++#include <linux/version.h>
+ 
+ #include "ss/policydb.h"
++
++/* Linux before 6.6 keeps the policy in selinux_state.ss. */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
++struct selinux_policy {
++	struct policydb policydb;
++	struct sidtab *sidtab;
++	u32 latest_granting;
++};
++#endif
+ 
+ struct selinux_policy *ksu_dup_sepolicy(struct selinux_policy *old_pol);
+ 

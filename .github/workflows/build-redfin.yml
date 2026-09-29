@@ -1,0 +1,135 @@
+name: Build redfin SukiSU + SUSFS kernel
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: redfin-sukisu-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  STOCK_APPROVED_BOOT_SHA256: ''
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          submodules: recursive
+
+      - name: Validate pins and project tests
+        run: |
+          set -Eeuo pipefail
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          python3 -m py_compile scripts/*.py
+          for script in scripts/*.sh; do
+            bash -n "$script"
+          done
+          python3 scripts/sync-stock.py --validate-only
+          docker compose config --quiet
+
+      - name: Build the pinned Docker image
+        run: docker compose build stock-build
+
+      - name: Build and package redfin artifacts
+        env:
+          JOBS: 3
+          SKIP_MRPROPER: 0
+          SUKISU_DRIVER_VERSION: 40900
+          ENABLE_SUSFS: 1
+          PACKAGE_ARTIFACT_DIR: /workspace/artifacts/susfs-sukisu-v420
+        run: docker compose run --rm stock-build
+
+      - name: Verify release files
+        run: |
+          test -s artifacts/susfs-sukisu-v420/AnyKernel-redfin-sukisu.zip
+          test -s artifacts/susfs-sukisu-v420/boot.img
+          test -s artifacts/susfs-sukisu-v420/fastboot/boot.img
+          test -s artifacts/susfs-sukisu-v420/source-lock.json
+          test -s artifacts/susfs-sukisu-v420/factory.sha256
+          cmp artifacts/susfs-sukisu-v420/boot.img artifacts/susfs-sukisu-v420/fastboot/boot.img
+          unzip -t artifacts/susfs-sukisu-v420/AnyKernel-redfin-sukisu.zip
+          (cd artifacts/susfs-sukisu-v420 && sha256sum -c SHA256SUMS)
+
+      - name: Publish GitHub Release
+        if: ${{ env.STOCK_APPROVED_BOOT_SHA256 != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: redfin-sukisu-${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "$STOCK_APPROVED_BOOT_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            printf 'Stock release is blocked until the current boot image passes the device gate.\n' >&2
+            exit 1
+          fi
+          artifact=artifacts/susfs-sukisu-v420
+          actual_boot_sha=$(sha256sum "$artifact/boot.img" | awk '{print $1}')
+          if [[ "$actual_boot_sha" != "$STOCK_APPROVED_BOOT_SHA256" ]]; then
+            printf 'Stock boot image differs from the device-approved image: %s.\n' "$actual_boot_sha" >&2
+            exit 1
+          fi
+
+          release_title="redfin SukiSU + SUSFS $GITHUB_SHA"
+          release_notes="Pinned redfin 4.19 SukiSU/SUSFS dual-ABI build. Test with fastboot boot before flashing.
+
+          Source commit: $GITHUB_SHA"
+          assets=(
+            artifacts/susfs-sukisu-v420/AnyKernel-redfin-sukisu.zip
+            artifacts/susfs-sukisu-v420/boot.img
+            artifacts/susfs-sukisu-v420/boot.json
+            artifacts/susfs-sukisu-v420/SHA256SUMS
+            artifacts/susfs-sukisu-v420/sukisu-susfs.lock
+            artifacts/susfs-sukisu-v420/source-lock.json
+            artifacts/susfs-sukisu-v420/factory.sha256
+          )
+
+          release_json=$(gh release view "$TAG_NAME" \
+            --json tagName,targetCommitish,name,assets 2> /dev/null || true)
+          if [[ -z "$release_json" ]]; then
+            if ! gh release create "$TAG_NAME" \
+              --target "$GITHUB_SHA" \
+              --title "$release_title" \
+              --notes "$release_notes"; then
+              # Another run may have created the same commit release concurrently.
+              release_json=$(gh release view "$TAG_NAME" \
+                --json tagName,targetCommitish,name,assets) || {
+                printf 'Could not create or inspect release %s.\n' "$TAG_NAME" >&2
+                exit 1
+              }
+            else
+              release_json=$(gh release view "$TAG_NAME" \
+                --json tagName,targetCommitish,name,assets)
+            fi
+          fi
+
+          if ! printf '%s\n' "$release_json" | python3 -c 'import json,sys; r=json.load(sys.stdin); tag,commit,title=sys.argv[1:]; valid=r["tagName"]==tag and r["targetCommitish"]==commit and r["name"]==title; sys.exit(0 if valid else 1)' \
+            "$TAG_NAME" "$GITHUB_SHA" "$release_title"; then
+            printf 'Release %s exists but does not match this build; leaving it untouched.\n' \
+              "$TAG_NAME" >&2
+            exit 1
+          fi
+
+          release_tmp=$(mktemp -d)
+          trap 'rm -rf "$release_tmp"' EXIT
+          for asset in "${assets[@]}"; do
+            asset_name=${asset##*/}
+            if printf '%s\n' "$release_json" | python3 -c 'import json,sys; r=json.load(sys.stdin); name=sys.argv[1]; sys.exit(0 if any(a["name"]==name for a in r["assets"]) else 1)' \
+              "$asset_name"; then
+              gh release download "$TAG_NAME" --pattern "$asset_name" --dir "$release_tmp"
+              if ! cmp -s "$asset" "$release_tmp/$asset_name"; then
+                printf 'Release asset %s differs from this build; refusing to overwrite it.\n' \
+                  "$asset_name" >&2
+                exit 1
+              fi
+              printf 'Release asset %s already matches; leaving it unchanged.\n' "$asset_name"
+            else
+              gh release upload "$TAG_NAME" "$asset"
+            fi
+          done

@@ -1,0 +1,42 @@
+diff --git a/kernel/feature/cpu_spoof.c b/kernel/feature/cpu_spoof.c
+--- a/kernel/feature/cpu_spoof.c
++++ b/kernel/feature/cpu_spoof.c
+@@ -154,10 +154,13 @@
+ #endif
+ 
+                 /* Resolve 'curr_clocksource' double pointer and overwrite active clock mode */
+-                {
+-                    struct clocksource **curr_cs_ptr =
+-                        (struct clocksource **)find_kernel_symbol_exact("curr_clocksource");
+-                    if (curr_cs_ptr && *curr_cs_ptr) {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
++				{
++					struct clocksource **curr_cs_ptr =
++						(struct clocksource **)
++							find_kernel_symbol_exact(
++								"curr_clocksource");
++					if (curr_cs_ptr && *curr_cs_ptr) {
+                         struct clocksource *cs = *curr_cs_ptr;
+                         pr_info("ksu: set_spoof_cpu found active clocksource '%s' (current vdso_clock_mode: %d)\n",
+                                 cs->name ? cs->name : "unknown", cs->vdso_clock_mode);
+@@ -168,11 +171,15 @@
+                         pr_warn("ksu: set_spoof_cpu failed to resolve 'curr_clocksource'\n");
+                     }
+                 }
+-
+-                /* Overwrite fallback default clock mode variable */
+-                {
+-                    enum vdso_clock_mode *vd_default = (enum vdso_clock_mode *)find_kernel_symbol_exact("vdso_default");
+-                    if (vd_default) {
++#endif
++
++				/* Overwrite fallback default clock mode variable */
++				{
++					enum vdso_clock_mode *vd_default =
++						(enum vdso_clock_mode *)
++							find_kernel_symbol_exact(
++								"vdso_default");
++					if (vd_default) {
+                         pr_info("ksu: set_spoof_cpu found 'vdso_default' (current value: %d)\n", *vd_default);
+                         *vd_default = VDSO_CLOCKMODE_ARCHTIMER;
+                         pr_info("ksu: set_spoof_cpu updated 'vdso_default' to %d\n", *vd_default);

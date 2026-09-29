@@ -1,0 +1,20 @@
+diff --git a/fs/exec.c b/fs/exec.c
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -1893,6 +1893,16 @@
+ 			      struct user_arg_ptr envp,
+ 			      int flags)
+ {
++#if defined(CONFIG_KSU) && defined(CONFIG_KSU_MANUAL_HOOK)
++	extern void ksu_manual_execveat(
++		const char *path, const char __user *const __user *argv_user);
++	if (!IS_ERR_OR_NULL(filename)
++#ifdef CONFIG_COMPAT
++	    && !argv.is_compat
++#endif
++	)
++		ksu_manual_execveat(filename->name, argv.ptr.native);
++#endif
+ 	return __do_execve_file(fd, filename, argv, envp, flags, NULL);
+ }
+ 

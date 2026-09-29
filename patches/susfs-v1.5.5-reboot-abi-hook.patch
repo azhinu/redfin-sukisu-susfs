@@ -1,0 +1,22 @@
+diff --git a/fs/susfs.c b/fs/susfs.c
+--- a/fs/susfs.c
++++ b/fs/susfs.c
+@@ -1339,3 +1339,5 @@
+ 
+ /* No module exit is needed becuase it should never be a loadable kernel module */
+ //void __init susfs_exit(void)
++
++#include "susfs_compat.inc"
+diff --git a/include/linux/susfs.h b/include/linux/susfs.h
+--- a/include/linux/susfs.h
++++ b/include/linux/susfs.h
+@@ -212,4 +212,8 @@
+ /* susfs_init */
+ void susfs_init(void);
+ 
+-#endif
++/* SukiSU v4.2 reboot(2) ABI compatibility dispatcher. */
++int susfs_handle_reboot(int magic1, int magic2, unsigned int cmd,
++			void __user *arg);
++
++#endif

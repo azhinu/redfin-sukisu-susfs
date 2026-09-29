@@ -1,0 +1,23 @@
+diff --git a/kernel/sys.c b/kernel/sys.c
+--- a/kernel/sys.c
++++ b/kernel/sys.c
+@@ -2435,6 +2435,19 @@
+ 	if (error != -ENOSYS)
+ 		return error;
+ 
++#if defined(CONFIG_KSU) && defined(CONFIG_KSU_MANUAL_HOOK) &&                  \
++	defined(CONFIG_KSU_SUSFS)
++	{
++		extern int ksu_handle_susfs_prctl(
++			int option, unsigned long command, unsigned long data,
++			unsigned long error_pointer);
++
++		error = ksu_handle_susfs_prctl(option, arg2, arg3, arg5);
++		if (error != -ENOSYS)
++			return error;
++	}
++#endif
++
+ 	error = 0;
+ 	switch (option) {
+ 	case PR_SET_PDEATHSIG:

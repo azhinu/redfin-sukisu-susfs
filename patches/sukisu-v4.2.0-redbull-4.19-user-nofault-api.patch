@@ -1,0 +1,48 @@
+diff --git a/kernel/runtime/ksud_integration.c b/kernel/runtime/ksud_integration.c
+--- a/kernel/runtime/ksud_integration.c
++++ b/kernel/runtime/ksud_integration.c
+@@ -29,6 +29,12 @@
+ #include "hook/syscall_hook.h"
+ #include "hook/syscall_event_bridge.h"
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
++#define strncpy_from_user_nofault strncpy_from_unsafe_user
++#define copy_from_user_nofault probe_user_read
++#define copy_to_user_nofault probe_user_write
++#endif
++
+ // clang-format off
+ static const char KERNEL_SU_RC[] =
+     "\n"
+diff --git a/kernel/sulog/event.c b/kernel/sulog/event.c
+--- a/kernel/sulog/event.c
++++ b/kernel/sulog/event.c
+@@ -17,6 +17,7 @@
+ #include "feature/sulog.h"
+ #include "infra/event_queue.h"
+ #include "klog.h" // IWYU pragma: keep
++#include "kernel_compat.h"
+ #include "sulog/event.h"
+ 
+ #define KSU_SULOG_MAX_QUEUED 256U
+diff --git a/kernel/kernel_compat.h b/kernel/kernel_compat.h
+--- a/kernel/kernel_compat.h
++++ b/kernel/kernel_compat.h
+@@ -3,6 +3,17 @@
+ 
+ #include <linux/fs.h>
+ #include <linux/version.h>
++#include <linux/uaccess.h>
++
++/* Linux 4.19 has the same no-fault primitives under their older names. */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
++#define strncpy_from_user_nofault(dst, src, count)                             \
++	strncpy_from_unsafe_user((dst), (src), (count))
++#define copy_from_user_nofault(dst, src, count)                                \
++	probe_user_read((dst), (src), (count))
++#define copy_to_user_nofault(dst, src, count)                                  \
++	probe_user_write((dst), (src), (count))
++#endif
+ 
+ /*
+  * ksu_copy_from_user_retry

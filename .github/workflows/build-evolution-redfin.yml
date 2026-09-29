@@ -1,0 +1,194 @@
+name: Build redfin Evolution X SukiSU + SUSFS kernel
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      EVOLUTION_ROM_URL:
+        description: Fresh download URL for EvolutionX-16.0-20260207-redfin-11.5.3-Official.zip
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: redfin-evolution-sukisu-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  EVOLUTION_ROM_URL: ${{ inputs.EVOLUTION_ROM_URL || vars.EVOLUTION_ROM_URL }}
+  EVOLUTION_ROM_FILENAME: EvolutionX-16.0-20260207-redfin-11.5.3-Official.zip
+  EVOLUTION_ROM_SHA256: 7078ba70477b3ebb29c76a4d29afe637aa612d0bb752a1c8283056314d15a535
+  EVOLUTION_PAYLOAD_BOOT_SHA256: b00b08be4e67f9ba5ead3aca93041b95abf3b6122ba6c8922a03da0eb2666693
+  EVOLUTION_PAYLOAD_VENDOR_BOOT_SHA256: 5196a5a4b92a2ea1b8d735fcf4a5ab4f9f86f261b8ea95cf505c47b1f8ac364e
+  EVOLUTION_KERNEL_URL: https://github.com/Evolution-X-Devices/kernel_google_redbull.git
+  EVOLUTION_KERNEL_REF: bka
+  EVOLUTION_KERNEL_REVISION: 40601b47a2c5e912611a44c44d0a90945b9ba805
+  EVOLUTION_APPROVED_BOOT_SHA256: b67ac5ca303902c38cb9370ff48e03929492ec6cdcd9af19d527540218b3fe2c
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate ROM download URL
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "${EVOLUTION_ROM_URL:-}" ]]; then
+            printf 'Evolution ROM URL is required. Set the EVOLUTION_ROM_URL workflow input or repository variable.\n' >&2
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          submodules: recursive
+
+      - name: Validate pins and project tests
+        run: |
+          set -Eeuo pipefail
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          python3 -m py_compile scripts/*.py
+          for script in scripts/*.sh; do
+            bash -n "$script"
+          done
+          python3 scripts/sync-stock.py --validate-only
+          docker compose config --quiet
+
+      - name: Download and verify Evolution X ROM
+        run: |
+          set -Eeuo pipefail
+          mkdir -p rom/evolution
+          curl -fL --retry 3 --retry-all-errors \
+            -o "rom/evolution/$EVOLUTION_ROM_FILENAME" "$EVOLUTION_ROM_URL"
+          printf '%s  %s\n' "$EVOLUTION_ROM_SHA256" \
+            "rom/evolution/$EVOLUTION_ROM_FILENAME" | sha256sum -c -
+          python3 scripts/extract-ota-images.py \
+            --archive "rom/evolution/$EVOLUTION_ROM_FILENAME" \
+            --output rom/evolution \
+            --expected "boot=$EVOLUTION_PAYLOAD_BOOT_SHA256" \
+            --expected "vendor_boot=$EVOLUTION_PAYLOAD_VENDOR_BOOT_SHA256"
+
+      - name: Fetch pinned Evolution kernel source
+        run: |
+          set -Eeuo pipefail
+          git clone --depth 1 --branch "$EVOLUTION_KERNEL_REF" \
+            "$EVOLUTION_KERNEL_URL" "$RUNNER_TEMP/evolution-kernel"
+          git -C "$RUNNER_TEMP/evolution-kernel" fetch --depth 1 origin \
+            "$EVOLUTION_KERNEL_REVISION"
+          git -C "$RUNNER_TEMP/evolution-kernel" checkout --detach \
+            "$EVOLUTION_KERNEL_REVISION"
+          test "$(git -C "$RUNNER_TEMP/evolution-kernel" rev-parse HEAD)" = \
+            "$EVOLUTION_KERNEL_REVISION"
+
+      - name: Build the pinned Docker image
+        run: docker compose build stock-build
+
+      - name: Build and package Evolution X artifacts
+        env:
+          BUILD_TARGET: evolution
+          BUILD_CONFIG: build.config.redbull.evolution.sukisu
+          JOBS: 3
+          SKIP_MRPROPER: 0
+          SUKISU_DRIVER_VERSION: 40900
+          ENABLE_SUSFS: 1
+          PACKAGE_ARTIFACT_DIR: /workspace/artifacts/evolution-susfs-v420
+          EVOLUTION_KERNEL_SOURCE: ${{ runner.temp }}/evolution-kernel
+        run: docker compose run --rm stock-build
+
+      - name: Verify Evolution release files
+        run: |
+          set -Eeuo pipefail
+          artifact=artifacts/evolution-susfs-v420
+          test -s "$artifact/AnyKernel-redfin-sukisu.zip"
+          test -s "$artifact/boot.img"
+          test -s "$artifact/vendor_boot.img"
+          test -s "$artifact/fastboot/boot.img"
+          test -s "$artifact/fastboot/vendor_boot.img"
+          test -s "$artifact/evolution-kernel.config"
+          test -s "$artifact/evolution-rom.sha256"
+          test -s "$artifact/evolution-kernel.revision"
+          test -s "$artifact/sukisu-susfs.lock"
+          test -s "$artifact/source-lock.json"
+          cmp "$artifact/boot.img" "$artifact/fastboot/boot.img"
+          cmp "$artifact/vendor_boot.img" "$artifact/fastboot/vendor_boot.img"
+          unzip -t "$artifact/AnyKernel-redfin-sukisu.zip"
+          (cd "$artifact" && sha256sum -c SHA256SUMS)
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: redfin-evolution-sukisu-${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "$EVOLUTION_APPROVED_BOOT_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            printf 'Evolution release is blocked until the CI boot image passes the device gate.\n' >&2
+            exit 1
+          fi
+          artifact=artifacts/evolution-susfs-v420
+          actual_boot_sha=$(sha256sum "$artifact/boot.img" | awk '{print $1}')
+          if [[ "$actual_boot_sha" != "$EVOLUTION_APPROVED_BOOT_SHA256" ]]; then
+            printf 'Evolution boot image differs from the device-approved image: %s.\n' "$actual_boot_sha" >&2
+            exit 1
+          fi
+          release_title="redfin Evolution X $EVOLUTION_ROM_FILENAME SukiSU + SUSFS $GITHUB_SHA"
+          release_notes="Evolution X $EVOLUTION_ROM_FILENAME boot-template build with pinned SukiSU v4.2.0, SUSFS v1.5.5, and driver code 40900.
+
+          Device gate: fastboot boot on redfin reached Android with Manager UID 0 and ADB Root. Three PTY executions through a temporary ksud su symlink, SUSFS UNAME, OPEN_REDIRECT, SUS_PATH and SUS_KSTAT passed; the phone rebooted normally to its installed kernel. ADB Root required an off/on toggle in Manager after temporary boot. Classic su is unsupported on this manual-hook build.
+
+          Test with fastboot boot before flashing. Keep the matching vendor_boot image; do not mix it with stock images.
+
+          Source commit: $GITHUB_SHA"
+          assets=(
+            "$artifact/AnyKernel-redfin-sukisu.zip"
+            "$artifact/boot.img"
+            "$artifact/vendor_boot.img"
+            "$artifact/boot.json"
+            "$artifact/SHA256SUMS"
+            "$artifact/evolution-rom.sha256"
+            "$artifact/evolution-kernel.revision"
+            "$artifact/sukisu-susfs.lock"
+            "$artifact/source-lock.json"
+          )
+
+          release_json=$(gh release view "$TAG_NAME" \
+            --json tagName,targetCommitish,name,assets 2> /dev/null || true)
+          if [[ -z "$release_json" ]]; then
+            if ! gh release create "$TAG_NAME" \
+              --target "$GITHUB_SHA" \
+              --title "$release_title" \
+              --notes "$release_notes"; then
+              release_json=$(gh release view "$TAG_NAME" \
+                --json tagName,targetCommitish,name,assets) || {
+                printf 'Could not create or inspect release %s.\n' "$TAG_NAME" >&2
+                exit 1
+              }
+            else
+              release_json=$(gh release view "$TAG_NAME" \
+                --json tagName,targetCommitish,name,assets)
+            fi
+          fi
+
+          if ! printf '%s\n' "$release_json" | python3 -c 'import json,sys; r=json.load(sys.stdin); tag,commit,title=sys.argv[1:]; valid=r["tagName"]==tag and r["targetCommitish"]==commit and r["name"]==title; sys.exit(0 if valid else 1)' \
+            "$TAG_NAME" "$GITHUB_SHA" "$release_title"; then
+            printf 'Release metadata mismatch: %s.\n' "$TAG_NAME" >&2
+            exit 1
+          fi
+
+          release_tmp=$(mktemp -d)
+          trap 'rm -rf "$release_tmp"' EXIT
+          for asset in "${assets[@]}"; do
+            asset_name=${asset##*/}
+            if printf '%s\n' "$release_json" | python3 -c \
+              'import json,sys; r=json.load(sys.stdin); n=sys.argv[1]; sys.exit(0 if any(a["name"]==n for a in r["assets"]) else 1)' \
+              "$asset_name"; then
+              gh release download "$TAG_NAME" --pattern "$asset_name" --dir "$release_tmp"
+              if ! cmp -s "$asset" "$release_tmp/$asset_name"; then
+                printf 'Release asset differs from this build: %s.\n' "$asset_name" >&2
+                exit 1
+              fi
+            else
+              gh release upload "$TAG_NAME" "$asset"
+            fi
+          done

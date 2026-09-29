@@ -1,0 +1,20 @@
+diff --git a/kernel/supercall/supercall.c b/kernel/supercall/supercall.c
+--- a/kernel/supercall/supercall.c
++++ b/kernel/supercall/supercall.c
+@@ -123,11 +123,11 @@
+         tw->outp = (int __user *)arg4;
+         tw->cb.func = ksu_install_fd_tw_func;
+ 
+-        if (task_work_add(current, &tw->cb, TWA_RESUME)) {
+-            kfree(tw);
+-            pr_warn("install fd add task_work failed\n");
+-        }
+-    }
++		if (task_work_add(current, &tw->cb, true)) {
++			kfree(tw);
++			pr_warn("Install fd add task_work failed\n");
++		}
++	}
+ 
+     return 0;
+ }

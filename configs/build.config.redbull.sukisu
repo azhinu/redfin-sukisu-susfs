@@ -1,0 +1,94 @@
+# shellcheck shell=bash
+# The AOSP build framework supplies variables and consumes this configuration.
+# shellcheck disable=SC2034,SC2154
+# Stock redbull 4.19 kernel with SukiSU Ultra v4.2.0.
+KERNEL_DIR=private/msm-google
+# shellcheck disable=SC1090
+. "${ROOT_DIR}/${KERNEL_DIR}/build.config.redbull.vintf"
+
+BUILD_BOOT_IMG=
+BUILD_INITRAMFS=0
+EXT_MODULES=
+EXT_MODULES_MAKEFILE=
+POST_DEFCONFIG_CMDS="update_config && enable_sukisu"
+
+enable_sukisu() {
+  "${KERNEL_DIR}/scripts/config" --file "${OUT_DIR}/.config" \
+    -e KSU \
+    -e KSU_MANUAL_HOOK \
+    -e KSU_MANUAL_SU \
+    -d KPROBES \
+    -d KRETPROBES \
+    -d FTRACE_SYSCALLS \
+    -e KALLSYMS \
+    -e KALLSYMS_ALL \
+    -d KPM
+
+  if [[ "${ENABLE_SUSFS:-0}" == "1" ]]; then
+    "${KERNEL_DIR}/scripts/config" --file "${OUT_DIR}/.config" \
+      -e KSU_SUSFS \
+      -e KSU_SUSFS_SUS_PATH \
+      -e KSU_SUSFS_SUS_MOUNT \
+      -e KSU_SUSFS_SUS_KSTAT \
+      -e KSU_SUSFS_SPOOF_UNAME \
+      -e KSU_SUSFS_ENABLE_LOG \
+      -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+      -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+      -e KSU_SUSFS_OPEN_REDIRECT \
+      -d KSU_SUSFS_HAS_MAGIC_MOUNT \
+      -d KSU_SUSFS_TRY_UMOUNT
+  fi
+
+  # MAKE_ARGS is the AOSP build framework's word list.
+  # shellcheck disable=SC2086
+  (cd "${OUT_DIR}" &&
+    make O="${OUT_DIR}" CLANG_TRIPLE="${CLANG_TRIPLE}" \
+      CROSS_COMPILE="${CROSS_COMPILE}" "${TOOL_ARGS[@]}" ${MAKE_ARGS} olddefconfig)
+
+  grep -Fqx 'CONFIG_KSU=y' "${OUT_DIR}/.config" || {
+    echo 'Error: CONFIG_KSU=y is missing after olddefconfig.' >&2
+    return 1
+  }
+  grep -Fqx 'CONFIG_KSU_MANUAL_SU=y' "${OUT_DIR}/.config" || {
+    echo 'Error: CONFIG_KSU_MANUAL_SU=y is missing after olddefconfig.' >&2
+    return 1
+  }
+  grep -Fqx 'CONFIG_KSU_MANUAL_HOOK=y' "${OUT_DIR}/.config" || {
+    echo 'Error: CONFIG_KSU_MANUAL_HOOK=y is missing after olddefconfig.' >&2
+    return 1
+  }
+  grep -Fqx '# CONFIG_KPROBES is not set' "${OUT_DIR}/.config" || {
+    echo 'Error: CONFIG_KPROBES must be disabled for manual-hook mode.' >&2
+    return 1
+  }
+  if grep -Fqx 'CONFIG_KRETPROBES=y' "${OUT_DIR}/.config"; then
+    echo 'Error: CONFIG_KRETPROBES must be disabled for manual-hook mode.' >&2
+    return 1
+  fi
+  grep -Fqx '# CONFIG_FTRACE_SYSCALLS is not set' "${OUT_DIR}/.config" || {
+    echo 'Error: CONFIG_FTRACE_SYSCALLS must be disabled for manual-hook mode.' >&2
+    return 1
+  }
+  grep -Fqx 'CONFIG_KALLSYMS=y' "${OUT_DIR}/.config" || {
+    echo 'Error: CONFIG_KALLSYMS=y is missing after olddefconfig.' >&2
+    return 1
+  }
+  grep -Fqx 'CONFIG_KALLSYMS_ALL=y' "${OUT_DIR}/.config" || {
+    echo 'Error: CONFIG_KALLSYMS_ALL=y is missing after olddefconfig.' >&2
+    return 1
+  }
+  if [[ "${ENABLE_SUSFS:-0}" == "1" ]]; then
+    grep -Fqx 'CONFIG_KSU_SUSFS=y' "${OUT_DIR}/.config" || {
+      echo 'Error: CONFIG_KSU_SUSFS=y is missing after olddefconfig.' >&2
+      return 1
+    }
+    grep -Fqx 'CONFIG_KSU_SUSFS_SUS_PATH=y' "${OUT_DIR}/.config" || {
+      echo 'Error: CONFIG_KSU_SUSFS_SUS_PATH=y is missing after olddefconfig.' >&2
+      return 1
+    }
+    grep -Fqx '# CONFIG_KSU_SUSFS_TRY_UMOUNT is not set' "${OUT_DIR}/.config" || {
+      echo 'Error: CONFIG_KSU_SUSFS_TRY_UMOUNT must stay disabled for the v4.2 bridge.' >&2
+      return 1
+    }
+  fi
+}

@@ -1,0 +1,63 @@
+diff --git a/kernel/supercall/supercall.c b/kernel/supercall/supercall.c
+--- a/kernel/supercall/supercall.c
++++ b/kernel/supercall/supercall.c
+@@ -18,10 +18,12 @@
+ #include "util.h"
+ #include "klog.h" // IWYU pragma: keep
+ 
++#ifndef CONFIG_KSU_MANUAL_HOOK
+ struct ksu_install_fd_tw {
+     struct callback_head cb;
+     int __user *outp;
+ };
++#endif
+ 
+ static int anon_ksu_release(struct inode *inode, struct file *filp)
+ {
+@@ -64,6 +66,7 @@
+     return fd;
+ }
+ 
++#ifndef CONFIG_KSU_MANUAL_HOOK
+ static void ksu_install_fd_tw_func(struct callback_head *cb)
+ {
+     struct ksu_install_fd_tw *tw = container_of(cb, struct ksu_install_fd_tw, cb);
+@@ -108,23 +111,30 @@
+     .symbol_name = REBOOT_SYMBOL,
+     .pre_handler = reboot_handler_pre,
+ };
++#endif
+ 
+ void __init ksu_supercalls_init(void)
+ {
+-    int rc;
++#ifndef CONFIG_KSU_MANUAL_HOOK
++	int rc;
++#endif
+ 
+-    ksu_supercall_dump_commands();
++	ksu_supercall_dump_commands();
+ 
+-    rc = register_kprobe(&reboot_kp);
+-    if (rc) {
+-        pr_err("reboot kprobe failed: %d\n", rc);
+-    } else {
++#ifndef CONFIG_KSU_MANUAL_HOOK
++	rc = register_kprobe(&reboot_kp);
++	if (rc) {
++		pr_err("Reboot kprobe failed: %d\n", rc);
++	} else {
+         pr_info("reboot kprobe registered successfully\n");
+     }
++#endif
+ }
+ 
+ void __exit ksu_supercalls_exit(void)
+ {
+-    unregister_kprobe(&reboot_kp);
+-    ksu_supercall_cleanup_state();
++#ifndef CONFIG_KSU_MANUAL_HOOK
++	unregister_kprobe(&reboot_kp);
++#endif
++	ksu_supercall_cleanup_state();
+ }

@@ -1,0 +1,11 @@
+diff --git a/include/linux/susfs.h b/include/linux/susfs.h
+--- a/include/linux/susfs.h
++++ b/include/linux/susfs.h
+@@ -153,6 +153,7 @@
+ 
+ /* sus_kstat */
+ #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
++struct kstat;
+ int susfs_add_sus_kstat(struct st_susfs_sus_kstat* __user user_info);
+ int susfs_update_sus_kstat(struct st_susfs_sus_kstat* __user user_info);
+ bool susfs_is_sus_kstat_inode(struct inode *inode);

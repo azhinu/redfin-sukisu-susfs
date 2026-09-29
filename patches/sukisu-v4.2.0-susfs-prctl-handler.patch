@@ -1,0 +1,139 @@
+diff --git a/kernel/susfs.c b/kernel/susfs.c
+--- a/kernel/susfs.c
++++ b/kernel/susfs.c
+@@ -1,4 +1,6 @@
++#include <linux/cred.h>
+ #include <linux/susfs.h>
++#include <linux/susfs_def.h>
+ #include <linux/uaccess.h>
+ 
+ /*
+@@ -19,3 +21,128 @@
+ 	return 0;
+ #endif
+ }
++
++/*
++ * The pinned SUSFS helper still uses the original prctl(2) transport.
++ * Keep it as a compatibility path alongside SukiSU v4.2's reboot ABI.
++ */
++static int ksu_susfs_prctl_reply(unsigned long error_pointer, int result)
++{
++	if (!error_pointer)
++		return -EFAULT;
++	return put_user(result, (int __user *)error_pointer) ? -EFAULT : 0;
++}
++
++static int ksu_susfs_prctl_copy(unsigned long data, const void *source,
++				size_t size, unsigned long error_pointer)
++{
++	if (!data)
++		return -EFAULT;
++	if (copy_to_user((void __user *)data, source, size))
++		return ksu_susfs_prctl_reply(error_pointer, -EFAULT);
++	return ksu_susfs_prctl_reply(error_pointer, 0);
++}
++
++int ksu_handle_susfs_prctl(int option, unsigned long command,
++			   unsigned long data, unsigned long error_pointer)
++{
++	int result = -1;
++
++	if (option != 0xDEADBEEF)
++		return -ENOSYS;
++	if (current_uid().val != 0)
++		return -EPERM;
++	if (ksu_susfs_prctl_reply(error_pointer, -1))
++		return -EFAULT;
++
++	switch (command) {
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++	case CMD_SUSFS_ADD_SUS_PATH:
++		result = susfs_add_sus_path(
++			(struct st_susfs_sus_path __user *)data);
++		break;
++#endif
++#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
++	case CMD_SUSFS_ADD_SUS_MOUNT:
++		result = susfs_add_sus_mount(
++			(struct st_susfs_sus_mount __user *)data);
++		break;
++#endif
++#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
++	case CMD_SUSFS_ADD_SUS_KSTAT:
++	case CMD_SUSFS_ADD_SUS_KSTAT_STATICALLY:
++		result = susfs_add_sus_kstat(
++			(struct st_susfs_sus_kstat __user *)data);
++		break;
++	case CMD_SUSFS_UPDATE_SUS_KSTAT:
++		result = susfs_update_sus_kstat(
++			(struct st_susfs_sus_kstat __user *)data);
++		break;
++#endif
++#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
++	case CMD_SUSFS_SET_UNAME:
++		result = susfs_set_uname((struct st_susfs_uname __user *)data);
++		break;
++#endif
++#ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
++	case CMD_SUSFS_ENABLE_LOG:
++		if (data == 0 || data == 1) {
++			susfs_set_log(data != 0);
++			result = 0;
++		}
++		break;
++#endif
++#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
++	case CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG:
++		result = susfs_set_cmdline_or_bootconfig((char __user *)data);
++		break;
++#endif
++#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
++	case CMD_SUSFS_ADD_OPEN_REDIRECT:
++		result = susfs_add_open_redirect(
++			(struct st_susfs_open_redirect __user *)data);
++		break;
++#endif
++	case CMD_SUSFS_SHOW_VERSION:
++		return ksu_susfs_prctl_copy(data, SUSFS_VERSION,
++					    sizeof(SUSFS_VERSION),
++					    error_pointer);
++	case CMD_SUSFS_SHOW_VARIANT:
++		return ksu_susfs_prctl_copy(data, SUSFS_VARIANT,
++					    sizeof(SUSFS_VARIANT),
++					    error_pointer);
++	case CMD_SUSFS_SHOW_ENABLED_FEATURES: {
++		unsigned long features = 0;
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++		features |= BIT(0);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
++		features |= BIT(1);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
++		features |= BIT(4);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
++		features |= BIT(8);
++#endif
++#ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
++		features |= BIT(9);
++#endif
++#ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
++		features |= BIT(10);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
++		features |= BIT(11);
++#endif
++#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
++		features |= BIT(12);
++#endif
++		return ksu_susfs_prctl_copy(data, &features, sizeof(features),
++					    error_pointer);
++	}
++	default:
++		break;
++	}
++
++	return ksu_susfs_prctl_reply(error_pointer, result);
++}

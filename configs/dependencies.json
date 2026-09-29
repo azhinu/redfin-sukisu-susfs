@@ -1,0 +1,116 @@
+[
+  {
+    "path": "build",
+    "repository": "https://android.googlesource.com/kernel/build",
+    "revision": "aa9e9a42c7b058c1d339c7a03f97683b21eb9e35",
+    "name": "build"
+  },
+  {
+    "path": "private/msm-google",
+    "repository": "https://android.googlesource.com/kernel/msm",
+    "revision": "7b0944645172e8b690d42f68c8973ccb0ca45730",
+    "name": "kernel"
+  },
+  {
+    "path": "prebuilts-master/misc",
+    "repository": "https://android.googlesource.com/platform/prebuilts/misc",
+    "revision": "15560bb32cdb9b47db48eb4865b736df9708a8fe",
+    "name": "misc"
+  },
+  {
+    "path": "tools/mkbootimg",
+    "repository": "https://android.googlesource.com/platform/system/tools/mkbootimg",
+    "revision": "34bc8bfb493401f7aadbd3b434f9fbfa521e9301",
+    "name": "mkbootimg"
+  },
+  {
+    "path": "prebuilts/build-tools",
+    "repository": "https://android.googlesource.com/platform/prebuilts/build-tools",
+    "revision": "cfedc16ec3deb680fca6fe2aff44a1837a97b50d",
+    "name": "build-tools"
+  },
+  {
+    "path": "prebuilts/kernel-build-tools",
+    "repository": "https://android.googlesource.com/kernel/prebuilts/build-tools",
+    "revision": "ca5b087f88c0302ff66f59a6f26be663e92baf15",
+    "name": "kernel-build-tools"
+  },
+  {
+    "path": "prebuilts/gas/linux-x86",
+    "repository": "https://android.googlesource.com/platform/prebuilts/gas/linux-x86",
+    "revision": "b2a189331333e014bfef4c0425b3ef4b74accdd0",
+    "name": "gas"
+  },
+  {
+    "path": "private/msm-google/techpack/audio",
+    "repository": "https://android.googlesource.com/kernel/msm-extra",
+    "revision": "e867414fa42b483659dd56e5d4f0e6d4f1a5bb9d",
+    "name": "audio"
+  },
+  {
+    "path": "private/msm-google/techpack/camera",
+    "repository": "https://android.googlesource.com/kernel/msm-extra/camera-kernel",
+    "revision": "81d1b63026d15e91768527b862ff0becbf900663",
+    "name": "camera"
+  },
+  {
+    "path": "private/msm-google/techpack/dataipa",
+    "repository": "https://android.googlesource.com/kernel/msm-extra/dataipa",
+    "revision": "7063b704d5f99d7a8de5cedb490270b1ee8102c4",
+    "name": "dataipa"
+  },
+  {
+    "path": "private/msm-google/techpack/display",
+    "repository": "https://android.googlesource.com/kernel/msm-extra/display-drivers",
+    "revision": "ca74909cd98764454a2dacf784cda119c45a7f4c",
+    "name": "display"
+  },
+  {
+    "path": "private/msm-google/techpack/video",
+    "repository": "https://android.googlesource.com/kernel/msm-extra/video-driver",
+    "revision": "44b578f70256623c159580af17452851fba976d8",
+    "name": "video"
+  },
+  {
+    "path": "prebuilts-master/clang/host/linux-x86",
+    "repository": "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86",
+    "revision": "537e01a6ff78760ee5b69597efdbc47bc721058d",
+    "name": "clang"
+  },
+  {
+    "path": "private/msm-google/arch/arm64/boot/dts/vendor",
+    "repository": "https://android.googlesource.com/kernel/msm-extra/devicetree",
+    "revision": "afc98e2bb0716a57bf4f8d2b6191378dd7123ce4",
+    "name": "devicetree"
+  },
+  {
+    "path": "private/msm-google/arch/arm64/boot/dts/vendor/qcom/camera",
+    "repository": "https://android.googlesource.com/kernel/msm-extra/camera-devicetree",
+    "revision": "3d63f4795a04c39ed22a0eb110a808af64c14696",
+    "name": "camera-devicetree"
+  },
+  {
+    "path": "private/msm-google/arch/arm64/boot/dts/vendor/qcom/display",
+    "repository": "https://android.googlesource.com/kernel/msm-extra/display-devicetree",
+    "revision": "43e15efe49673c877faa88046094bf1dd5389e3a",
+    "name": "display-devicetree"
+  },
+  {
+    "name": "sukisu",
+    "path": "sources/sukisu",
+    "repository": "https://github.com/SukiSU-Ultra/SukiSU-Ultra.git",
+    "revision": "85eb4a95b8a61d756ecf53b9c5785e48e1b15039"
+  },
+  {
+    "name": "susfs",
+    "path": "sources/susfs",
+    "repository": "https://gitlab.com/simonpunk/susfs4ksu.git",
+    "revision": "001e69919c6271f690fd00b17e4c721c9e599152"
+  },
+  {
+    "name": "anykernel",
+    "path": "sources/anykernel",
+    "repository": "https://github.com/osm0sis/AnyKernel3.git",
+    "revision": "020dfeccf9d7e962a48400fc94d3e451df92eead"
+  }
+]

@@ -1,0 +1,208 @@
+diff --git a/kernel/Kbuild b/kernel/Kbuild
+--- a/kernel/Kbuild
++++ b/kernel/Kbuild
+@@ -1,4 +1,5 @@
+ kernelsu-objs := core/init.o
++kernelsu-objs += susfs.o
+ 
+ kernelsu-objs += feature/kernel_umount.o
+ kernelsu-objs += feature/sulog.o
+diff --git a/kernel/Kconfig b/kernel/Kconfig
+--- a/kernel/Kconfig
++++ b/kernel/Kconfig
+@@ -69,4 +69,65 @@
+ 	  Dynamically patch x64's hardened syscall dispatcher to support syscall hooks. This is a
+ 	  replacement for a kernel source code patch, and is useful for x86_64 LKM mode.
+ 
++menu "KernelSU - SUSFS"
++
++config KSU_SUSFS
++	bool "KernelSU addon - SUSFS"
++	depends on KSU
++	default n
++	help
++	  Enable the pinned SUSFS 1.5.5 implementation and its SukiSU ABI bridge.
++
++config KSU_SUSFS_SUS_PATH
++	bool "Hide suspicious paths"
++	depends on KSU_SUSFS
++	default n
++
++config KSU_SUSFS_SUS_MOUNT
++	bool "Hide suspicious mounts"
++	depends on KSU_SUSFS
++	default n
++
++config KSU_SUSFS_SUS_KSTAT
++	bool "Spoof suspicious kstat"
++	depends on KSU_SUSFS
++	default n
++
++config KSU_SUSFS_SPOOF_UNAME
++	bool "Spoof uname"
++	depends on KSU_SUSFS
++	default n
++
++config KSU_SUSFS_ENABLE_LOG
++	bool "Enable SUSFS kernel log"
++	depends on KSU_SUSFS
++	default n
++
++config KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
++	bool "Hide KSU and SUSFS symbols"
++	depends on KSU_SUSFS
++	default n
++
++config KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
++	bool "Spoof cmdline or bootconfig"
++	depends on KSU_SUSFS
++	default n
++
++config KSU_SUSFS_OPEN_REDIRECT
++	bool "Redirect open paths"
++	depends on KSU_SUSFS
++	default n
++
++config KSU_SUSFS_HAS_MAGIC_MOUNT
++	bool "SUSFS magic mount compatibility"
++	depends on KSU_SUSFS
++	default n
++
++config KSU_SUSFS_TRY_UMOUNT
++	bool "SUSFS try umount"
++	depends on KSU_SUSFS
++	default n
++
+ endmenu
++
++endmenu
+diff --git a/kernel/core/init.c b/kernel/core/init.c
+--- a/kernel/core/init.c
++++ b/kernel/core/init.c
+@@ -33,6 +33,10 @@
+ #include "feature/uts_spoof.h"
+ #include "infra/symbol_resolver.h"
+ 
++#ifdef CONFIG_KSU_SUSFS
++#include <linux/susfs.h>
++#endif
++
+ #if defined(__x86_64__) && !defined(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER)
+ #include <asm/cpufeature.h>
+ #include <linux/version.h>
+@@ -140,9 +144,13 @@
+ 
+     ksu_init_symbol_resolver();
+ 
+-    if (spoof_release || spoof_version) {
+-        ksu_spoof_version(spoof_release, spoof_version);
+-    }
++#ifdef CONFIG_KSU_SUSFS
++	susfs_init();
++#endif
++
++	if (spoof_release || spoof_version) {
++		ksu_spoof_version(spoof_release, spoof_version);
++	}
+ 
+ #ifndef CONFIG_KSU_MANUAL_HOOK
+ 	ksu_syscall_hook_init();
+diff --git a/kernel/hook/setuid_hook.c b/kernel/hook/setuid_hook.c
+--- a/kernel/hook/setuid_hook.c
++++ b/kernel/hook/setuid_hook.c
+@@ -21,6 +21,10 @@
+ #include "supercall/supercall.h"
+ #include "hook/tp_marker.h"
+ #include "feature/kernel_umount.h"
++
++#ifdef CONFIG_KSU_SUSFS
++#include <linux/susfs_def.h>
++#endif
+ 
+ static void ksu_allow_reboot_syscall(void)
+ {
+@@ -58,10 +62,18 @@
+ 		ksu_clear_task_tracepoint_flag_if_needed(current);
+ 	}
+ 
+-    // Handle kernel umount
+-    ksu_handle_umount(old_uid, new_uid);
++#ifdef CONFIG_KSU_SUSFS
++	if (new_uid >= 10000 && !ksu_is_allow_uid_for_current(new_uid))
++		current->susfs_task_state |= TASK_STRUCT_NON_ROOT_USER_APP_PROC;
++	else
++		current->susfs_task_state &=
++			~TASK_STRUCT_NON_ROOT_USER_APP_PROC;
++#endif
+ 
+-    return 0;
++	// Handle kernel umount
++	ksu_handle_umount(old_uid, new_uid);
++
++	return 0;
+ }
+ 
+ void __init ksu_setuid_hook_init(void)
+diff --git a/kernel/selinux/selinux.c b/kernel/selinux/selinux.c
+--- a/kernel/selinux/selinux.c
++++ b/kernel/selinux/selinux.c
+@@ -214,6 +214,18 @@
+     return is_sid_match(cred, cached_init_sid, INIT_CONTEXT);
+ }
+ 
++#ifdef CONFIG_KSU_SUSFS
++bool susfs_is_current_ksu_domain(void)
++{
++	return is_ksu_domain();
++}
++
++bool susfs_is_current_zygote_domain(void)
++{
++	return is_zygote(current_cred());
++}
++#endif
++
+ void escape_to_root_for_adb_root(void)
+ {
+     struct cred *cred = prepare_creds();
+diff --git a/kernel/selinux/selinux.h b/kernel/selinux/selinux.h
+--- a/kernel/selinux/selinux.h
++++ b/kernel/selinux/selinux.h
+@@ -29,6 +29,11 @@
+ 
+ bool is_init(const struct cred *cred);
+ 
++#ifdef CONFIG_KSU_SUSFS
++bool susfs_is_current_ksu_domain(void);
++bool susfs_is_current_zygote_domain(void);
++#endif
++
+ void apply_kernelsu_rules();
+ 
+ int handle_sepolicy(void __user *user_data, u64 data_len);
+diff --git a/kernel/susfs.c b/kernel/susfs.c
+new file mode 100644
+--- /dev/null
++++ b/kernel/susfs.c
+@@ -0,0 +1,21 @@
++#include <linux/susfs.h>
++#include <linux/uaccess.h>
++
++/*
++ * SukiSU v4.2 ksud sends SUSFS commands through reboot(2).  The legacy
++ * KSU reboot transport uses a different second magic value, so this handler
++ * is called explicitly from the kernel reboot syscall callsite.
++ */
++int ksu_handle_susfs_reboot(int magic1, int magic2, unsigned int cmd,
++			    void __user *arg)
++{
++#ifdef CONFIG_KSU_SUSFS
++	return susfs_handle_reboot(magic1, magic2, cmd, arg);
++#else
++	(void)magic1;
++	(void)magic2;
++	(void)cmd;
++	(void)arg;
++	return 0;
++#endif
++}

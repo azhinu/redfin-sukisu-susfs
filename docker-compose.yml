@@ -1,0 +1,36 @@
+services:
+  stock-build:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/workspace:ro
+      - ${EVOLUTION_KERNEL_SOURCE:-./rom/evolution/kernel}:/evolution-kernel:ro
+      - ./artifacts:/workspace/artifacts:rw
+      - stock-work:/stock
+      - stock-build-output:/stock-out
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=4g,mode=1777
+    environment:
+      JOBS: ${JOBS:-3}
+      SKIP_MRPROPER: ${SKIP_MRPROPER:-0}
+      BUILD_TARGET: ${BUILD_TARGET:-stock}
+      EVOLUTION_STAGE: ${EVOLUTION_STAGE:-susfs}
+      SUKISU_DRIVER_VERSION: ${SUKISU_DRIVER_VERSION:-40900}
+      ENABLE_SUSFS: ${ENABLE_SUSFS:-0}
+      PACKAGE_ARTIFACT_DIR: ${PACKAGE_ARTIFACT_DIR:-/workspace/artifacts/stock-sukisu}
+      LTO: ${LTO:-thin}
+      BUILD_CONFIG: ${BUILD_CONFIG:-build.config.redbull.sukisu}
+      EVOLUTION_KERNEL_SOURCE: /evolution-kernel
+      HOME: /tmp
+      TMPDIR: /tmp
+      XDG_CACHE_HOME: /tmp
+      STOCK_FACTORY_URL: ${STOCK_FACTORY_URL:-https://dl.google.com/dl/android/aosp/redfin-up1a.231105.001.b2-factory-4e5a2679.zip}
+      STOCK_FACTORY_SHA256: ${STOCK_FACTORY_SHA256:-}
+
+volumes:
+  stock-work:
+    name: redfin-kernel_stock-work
+  stock-build-output:
+    name: redfin-kernel_stock-build-output

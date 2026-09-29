@@ -1,0 +1,71 @@
+diff --git a/fs/namespace.c b/fs/namespace.c
+--- a/fs/namespace.c
++++ b/fs/namespace.c
+@@ -1634,6 +1634,38 @@
+ {
+ 	return ns_capable(current->nsproxy->mnt_ns->user_ns, CAP_SYS_ADMIN);
+ }
++
++/*
++ * Kernel-side mount teardown for callers that already resolved a path.
++ * Linux 4.19 has no path_umount() helper; keep the same reference and
++ * mount-point checks used by the later upstream helper.
++ */
++int ksu_path_umount(struct path *path, int flags)
++{
++	struct mount *mnt = real_mount(path->mnt);
++	int ret;
++
++	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
++		ret = -EINVAL;
++	else if (!may_mount())
++		ret = -EPERM;
++	else if (path->dentry != path->mnt->mnt_root)
++		ret = -EINVAL;
++	else if (!check_mnt(mnt))
++		ret = -EINVAL;
++	else if (mnt->mnt.mnt_flags & MNT_LOCKED)
++		ret = -EINVAL;
++	else if ((flags & MNT_FORCE) && !capable(CAP_SYS_ADMIN))
++		ret = -EPERM;
++	else
++		ret = do_umount(mnt, flags);
++
++	/* The caller passed ownership of both references to this helper. */
++	dput(path->dentry);
++	mntput_no_expire(mnt);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(ksu_path_umount);
+ 
+ #ifdef	CONFIG_MANDATORY_FILE_LOCKING
+ static bool may_mandlock(void)
+@@ -2222,6 +2254,28 @@
+ 	namespace_unlock();
+ 	return err;
+ }
++
++/*
++ * Narrow kernel-side mount helper for SukiSU's namespace setup.  The 4.19
++ * tree predates path_mount(); only propagation changes are accepted here.
++ */
++int ksu_path_mount(const char *dev_name, struct path *path,
++		   const char *type_page, unsigned long flags, void *data_page)
++{
++	int ret;
++
++	if (dev_name || type_page || data_page)
++		return -EINVAL;
++	if (flags & MS_NOUSER)
++		return -EINVAL;
++	ret = security_sb_mount(NULL, path, NULL, flags, NULL);
++	if (ret)
++		return ret;
++	if (!may_mount())
++		return -EPERM;
++	return do_change_type(path, flags);
++}
++EXPORT_SYMBOL_GPL(ksu_path_mount);
+ 
+ /*
+  * do loopback mount.

@@ -1,0 +1,22 @@
+# shellcheck shell=bash
+# The AOSP build framework supplies variables and consumes this configuration.
+# shellcheck disable=SC2034,SC2154
+# Plain Evolution X redbull 4.19.325 kernel. No SukiSU or SUSFS patches.
+KERNEL_DIR=private/msm-google-evolution
+# shellcheck disable=SC1090
+. "${ROOT_DIR}/${KERNEL_DIR}/build.config.redbull.vintf"
+
+# Make every locally built Evolution kernel unmistakable in uname -r.
+export LOCALVERSION=-dirty
+
+# The ROM kernel is non-GKI; its KMI list is not a strict post-build ABI gate.
+KERNEL_DIR=private/msm-google-evolution
+KMI_SYMBOL_LIST_STRICT_MODE=0
+TRIM_NONLISTED_KMI=0
+KMI_ENFORCED=0
+
+BUILD_BOOT_IMG=
+BUILD_INITRAMFS=0
+EXT_MODULES=
+EXT_MODULES_MAKEFILE=
+POST_DEFCONFIG_CMDS="update_config"

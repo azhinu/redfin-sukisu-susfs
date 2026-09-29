@@ -1,0 +1,22 @@
+diff --git a/kernel/feature/sucompat.c b/kernel/feature/sucompat.c
+--- a/kernel/feature/sucompat.c
++++ b/kernel/feature/sucompat.c
+@@ -5,7 +5,6 @@
+ #include <linux/preempt.h>
+ #include <linux/printk.h>
+ #include <linux/mm.h>
+-#include <linux/pgtable.h>
+ #include <linux/uaccess.h>
+ #include <asm/current.h>
+ #include <linux/cred.h>
+@@ -26,6 +25,10 @@
+ #include "sulog/event.h"
+ #include "ksu.h"
+ #include "util.h"
++
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
++#define strncpy_from_user_nofault strncpy_from_unsafe_user
++#endif
+ 
+ #define SU_PATH "/system/bin/su"
+ #define SH_PATH "/system/bin/sh"

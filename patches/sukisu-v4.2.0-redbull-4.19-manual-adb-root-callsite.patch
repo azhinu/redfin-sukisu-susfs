@@ -1,0 +1,26 @@
+diff --git a/fs/exec.c b/fs/exec.c
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -1900,8 +1900,21 @@
+ #ifdef CONFIG_COMPAT
+ 	    && !argv.is_compat
+ #endif
+-	)
++	) {
++		extern long ksu_adb_root_handle_execve_manual(
++			const char *path, unsigned long *envp_user);
++		unsigned long envp_user = (unsigned long)envp.ptr.native;
++		long adb_root = ksu_adb_root_handle_execve_manual(
++			filename->name, &envp_user);
++		if (adb_root < 0) {
++			putname(filename);
++			return adb_root;
++		}
++		if (adb_root > 0)
++			envp.ptr.native =
++				(const char __user *const __user *)envp_user;
+ 		ksu_manual_execveat(filename->name, argv.ptr.native);
++	}
+ #endif
+ 	return __do_execve_file(fd, filename, argv, envp, flags, NULL);
+ }

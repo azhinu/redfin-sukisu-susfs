@@ -1,0 +1,568 @@
+diff --git a/fs/susfs_compat.inc b/fs/susfs_compat.inc
+new file mode 100644
+--- /dev/null
++++ b/fs/susfs_compat.inc
+@@ -0,0 +1,563 @@
++#include <linux/stddef.h>
++
++/*
++ * SukiSU v4.2 ships a reboot(2)-based SUSFS userspace ABI.  The pinned
++ * SUSFS 1.5.5 kernel source predates that ABI and keeps the original
++ * KernelSU structures.  This file is included by fs/susfs.c so the adapter
++ * can use its private hash tables without exporting a second, divergent
++ * implementation of the feature hooks.
++ */
++
++#define SUSFS_COMPAT_MAGIC1 0xDEADBEEFU
++#define SUSFS_COMPAT_MAGIC2 0xFAFAFAFAU
++#define SUSFS_COMPAT_ERR_NOT_SUPPORTED 126
++#define SUSFS_COMPAT_MAX_PATHNAME 256
++#define SUSFS_COMPAT_FEATURES_SIZE 8192
++#define SUSFS_COMPAT_OPEN_REDIRECT_UID_SCHEME 2U
++#define SUSFS_COMPAT_CMD_PATH 0x55550U
++#define SUSFS_COMPAT_CMD_PATH_LOOP 0x55553U
++#define SUSFS_COMPAT_CMD_HIDE_MOUNTS 0x55561U
++#define SUSFS_COMPAT_CMD_KSTAT 0x55570U
++#define SUSFS_COMPAT_CMD_KSTAT_UPDATE 0x55571U
++#define SUSFS_COMPAT_CMD_KSTAT_STATIC 0x55572U
++#define SUSFS_COMPAT_CMD_UNAME 0x55590U
++#define SUSFS_COMPAT_CMD_LOG 0x555A0U
++#define SUSFS_COMPAT_CMD_CMDLINE 0x555B0U
++#define SUSFS_COMPAT_CMD_OPEN_REDIRECT 0x555C0U
++#define SUSFS_COMPAT_CMD_SHOW_VERSION 0x555E1U
++#define SUSFS_COMPAT_CMD_SHOW_FEATURES 0x555E2U
++#define SUSFS_COMPAT_CMD_SHOW_VARIANT 0x555E3U
++#define SUSFS_COMPAT_CMD_AVC_LOG 0x60010U
++#define SUSFS_COMPAT_CMD_MAP 0x60020U
++
++struct susfs_compat_path_cmd {
++	char target_pathname[SUSFS_COMPAT_MAX_PATHNAME];
++	int err;
++};
++
++struct susfs_compat_open_redirect_cmd {
++	char target_pathname[SUSFS_COMPAT_MAX_PATHNAME];
++	char redirected_pathname[SUSFS_COMPAT_MAX_PATHNAME];
++	__u32 uid_scheme;
++	int err;
++};
++
++struct susfs_compat_kstat_cmd {
++	__u32 is_statically;
++	__u64 target_ino;
++	char target_pathname[SUSFS_COMPAT_MAX_PATHNAME];
++	__u64 spoofed_ino;
++	__u64 spoofed_dev;
++	__u32 spoofed_nlink;
++	__u64 spoofed_size;
++	__s64 spoofed_atime_tv_sec;
++	__u64 spoofed_atime_tv_nsec;
++	__s64 spoofed_mtime_tv_sec;
++	__u64 spoofed_mtime_tv_nsec;
++	__s64 spoofed_ctime_tv_sec;
++	__u64 spoofed_ctime_tv_nsec;
++	__u64 spoofed_blocks;
++	__s64 spoofed_blksize;
++	__u32 flags;
++	int err;
++};
++
++struct susfs_compat_uname_cmd {
++	char release[__NEW_UTS_LEN + 1];
++	char version[__NEW_UTS_LEN + 1];
++	int err;
++};
++
++struct susfs_compat_toggle_cmd {
++	__u32 enabled;
++	int err;
++};
++
++struct susfs_compat_version_cmd {
++	char value[16];
++	int err;
++};
++
++struct susfs_compat_variant_cmd {
++	char value[16];
++	int err;
++};
++
++struct susfs_compat_features_cmd {
++	char value[SUSFS_COMPAT_FEATURES_SIZE];
++	int err;
++};
++
++struct susfs_compat_cmdline_cmd {
++	char value[8192];
++	int err;
++};
++
++static int susfs_compat_set_err(void __user *arg, size_t offset, int err)
++{
++	return copy_to_user((char __user *)arg + offset, &err, sizeof(err)) ?
++		-EFAULT : 0;
++}
++
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++static int susfs_compat_add_path(const char *pathname)
++{
++	struct path path;
++	struct inode *inode, *target_inode;
++	u64 sb_id;
++	struct st_susfs_sus_path_hlist *entry, *old = NULL;
++	struct hlist_node *node;
++	unsigned long ino;
++	int bucket;
++
++	if (kern_path(pathname, LOOKUP_FOLLOW, &path))
++		return -ENOENT;
++	inode = d_inode(path.dentry);
++	if (!inode) {
++		path_put(&path);
++		return -ENOENT;
++	}
++	ino = inode->i_ino;
++	path_put(&path);
++
++	if (susfs_update_sus_path_inode((char *)pathname, ino, &path, &sb_id))
++		return -EINVAL;
++
++	entry = kmalloc(sizeof(*entry), GFP_KERNEL);
++	if (!entry) {
++		path_put(&path);
++		return -ENOMEM;
++	}
++	entry->target_ino = ino;
++	entry->target_sb_id = sb_id;
++	strlcpy(entry->target_pathname, pathname, sizeof(entry->target_pathname));
++	mutex_lock(&susfs_sus_path_lock);
++	spin_lock(&susfs_spin_lock);
++	hash_for_each_safe(SUS_PATH_HLIST, bucket, node, old, node) {
++		if (!strcmp(old->target_pathname, pathname)) {
++			hash_del_rcu(&old->node);
++			break;
++		}
++	}
++	hash_add_rcu(SUS_PATH_HLIST, &entry->node, ino);
++	spin_unlock(&susfs_spin_lock);
++	target_inode = d_inode(path.dentry);
++	spin_lock(&target_inode->i_lock);
++	target_inode->i_state |= INODE_STATE_SUS_PATH;
++	spin_unlock(&target_inode->i_lock);
++	path_put(&path);
++	mutex_unlock(&susfs_sus_path_lock);
++	if (old) {
++		synchronize_rcu();
++		kfree(old);
++	}
++	return 0;
++}
++#else
++static int susfs_compat_add_path(const char *pathname)
++{
++	return -SUSFS_COMPAT_ERR_NOT_SUPPORTED;
++}
++#endif
++
++#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
++static int susfs_compat_store_kstat(const struct st_susfs_sus_kstat *info)
++{
++	struct st_susfs_sus_kstat_hlist *entry, *old = NULL;
++	struct inode *target_inode;
++	struct path path;
++	u64 sb_id;
++	struct hlist_node *node;
++	int bucket;
++
++	if (!info->target_pathname[0])
++		return -EINVAL;
++	if (susfs_update_sus_kstat_inode((char *)info->target_pathname,
++			info->target_ino, &path, &sb_id))
++		return -EINVAL;
++
++	entry = kmalloc(sizeof(*entry), GFP_KERNEL);
++	if (!entry) {
++		path_put(&path);
++		return -ENOMEM;
++	}
++	entry->target_ino = info->target_ino;
++	entry->target_sb_id = sb_id;
++	memcpy(&entry->info, info, sizeof(*info));
++	mutex_lock(&susfs_sus_kstat_lock);
++	spin_lock(&susfs_spin_lock);
++	hash_for_each_safe(SUS_KSTAT_HLIST, bucket, node, old, node) {
++		if (!strcmp(old->info.target_pathname, info->target_pathname)) {
++			hash_del_rcu(&old->node);
++			break;
++		}
++	}
++	hash_add_rcu(SUS_KSTAT_HLIST, &entry->node, entry->target_ino);
++	spin_unlock(&susfs_spin_lock);
++	target_inode = d_inode(path.dentry);
++	spin_lock(&target_inode->i_lock);
++	target_inode->i_state |= INODE_STATE_SUS_KSTAT;
++	spin_unlock(&target_inode->i_lock);
++	path_put(&path);
++	mutex_unlock(&susfs_sus_kstat_lock);
++	if (old) {
++		synchronize_rcu();
++		kfree(old);
++	}
++	return 0;
++}
++static int susfs_compat_update_kstat(const struct st_susfs_sus_kstat *info,
++		__u32 flags)
++{
++	struct st_susfs_sus_kstat_hlist *entry, *old_entry = NULL;
++	struct st_susfs_sus_kstat old_info;
++	struct st_susfs_sus_kstat_hlist *new_entry;
++	struct path target_path;
++	u64 target_sb_id;
++	int bucket;
++	bool found = false;
++
++	if (!info->target_pathname[0])
++		return -EINVAL;
++	mutex_lock(&susfs_sus_kstat_lock);
++	rcu_read_lock();
++	hash_for_each_rcu(SUS_KSTAT_HLIST, bucket, entry, node) {
++		if (!strcmp(entry->info.target_pathname, info->target_pathname)) {
++			memcpy(&old_info, &entry->info, sizeof(old_info));
++			found = true;
++			break;
++		}
++	}
++	rcu_read_unlock();
++	if (!found) {
++		mutex_unlock(&susfs_sus_kstat_lock);
++		return -ENOENT;
++	}
++	if (susfs_update_sus_kstat_inode(old_info.target_pathname,
++			info->target_ino, &target_path, &target_sb_id)) {
++		mutex_unlock(&susfs_sus_kstat_lock);
++		return -EINVAL;
++	}
++	new_entry = kmalloc(sizeof(*new_entry), GFP_KERNEL);
++	if (!new_entry) {
++		path_put(&target_path);
++		mutex_unlock(&susfs_sus_kstat_lock);
++		return -ENOMEM;
++	}
++	memcpy(&new_entry->info, &old_info, sizeof(old_info));
++	new_entry->target_ino = info->target_ino;
++	new_entry->target_sb_id = target_sb_id;
++	new_entry->info.target_ino = info->target_ino;
++	if (flags & BIT(3))
++		new_entry->info.spoofed_size = info->spoofed_size;
++	if (flags & BIT(10))
++		new_entry->info.spoofed_blocks = info->spoofed_blocks;
++
++	spin_lock(&susfs_spin_lock);
++	hash_for_each(SUS_KSTAT_HLIST, bucket, entry, node) {
++		if (!strcmp(entry->info.target_pathname, info->target_pathname)) {
++			old_entry = entry;
++			break;
++		}
++	}
++	if (old_entry) {
++		hash_add_rcu(SUS_KSTAT_HLIST, &new_entry->node, info->target_ino);
++		hash_del_rcu(&old_entry->node);
++	}
++	spin_unlock(&susfs_spin_lock);
++	if (!old_entry) {
++		path_put(&target_path);
++		mutex_unlock(&susfs_sus_kstat_lock);
++		kfree(new_entry);
++		return 0;
++	}
++	{
++		struct inode *target_inode = d_inode(target_path.dentry);
++		spin_lock(&target_inode->i_lock);
++		target_inode->i_state |= INODE_STATE_SUS_KSTAT;
++		spin_unlock(&target_inode->i_lock);
++	}
++	path_put(&target_path);
++	mutex_unlock(&susfs_sus_kstat_lock);
++	synchronize_rcu();
++	kfree(old_entry);
++	return 0;
++}
++#endif
++
++#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
++static int susfs_compat_store_open_redirect(const char *target,
++		const char *redirected)
++{
++	struct path path;
++	struct inode *inode, *target_inode;
++	struct st_susfs_open_redirect_hlist *entry, *old = NULL;
++	struct hlist_node *node;
++	unsigned long ino;
++	int bucket;
++
++	if (kern_path(target, LOOKUP_FOLLOW, &path))
++		return -ENOENT;
++	inode = d_inode(path.dentry);
++	if (!inode) {
++		path_put(&path);
++		return -ENOENT;
++	}
++	ino = inode->i_ino;
++	path_put(&path);
++
++	entry = kmalloc(sizeof(*entry), GFP_KERNEL);
++	if (!entry)
++		return -ENOMEM;
++	entry->target_ino = ino;
++	strlcpy(entry->target_pathname, target, sizeof(entry->target_pathname));
++	strlcpy(entry->redirected_pathname, redirected,
++		sizeof(entry->redirected_pathname));
++	if (susfs_update_open_redirect_inode(entry, &path)) {
++		kfree(entry);
++		return -EINVAL;
++	}
++
++	mutex_lock(&susfs_open_redirect_lock);
++	spin_lock(&susfs_spin_lock);
++	hash_for_each_safe(OPEN_REDIRECT_HLIST, bucket, node, old, node) {
++		if (!strcmp(old->target_pathname, target)) {
++			hash_del_rcu(&old->node);
++			break;
++		}
++	}
++	hash_add_rcu(OPEN_REDIRECT_HLIST, &entry->node, ino);
++	spin_unlock(&susfs_spin_lock);
++	target_inode = d_inode(path.dentry);
++	spin_lock(&target_inode->i_lock);
++	target_inode->i_state |= INODE_STATE_OPEN_REDIRECT;
++	spin_unlock(&target_inode->i_lock);
++	path_put(&path);
++	mutex_unlock(&susfs_open_redirect_lock);
++	if (old) {
++		synchronize_rcu();
++		kfree(old);
++	}
++	return 0;
++}
++#endif
++
++static int susfs_compat_set_uname(void __user *arg)
++{
++#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
++	struct susfs_compat_uname_cmd cmd;
++
++	if (copy_from_user(&cmd, arg, sizeof(cmd)))
++		return -EFAULT;
++	cmd.release[__NEW_UTS_LEN] = '\0';
++	cmd.version[__NEW_UTS_LEN] = '\0';
++	spin_lock(&susfs_uname_spin_lock);
++	if (!strcmp(cmd.release, "default"))
++		strlcpy(my_uname.release, utsname()->release, sizeof(my_uname.release));
++	else
++		strlcpy(my_uname.release, cmd.release, sizeof(my_uname.release));
++	if (!strcmp(cmd.version, "default"))
++		strlcpy(my_uname.version, utsname()->version, sizeof(my_uname.version));
++	else
++		strlcpy(my_uname.version, cmd.version, sizeof(my_uname.version));
++	spin_unlock(&susfs_uname_spin_lock);
++	return 0;
++#else
++	return -SUSFS_COMPAT_ERR_NOT_SUPPORTED;
++#endif
++}
++
++static int susfs_compat_show_features(void __user *arg)
++{
++	struct susfs_compat_features_cmd cmd;
++	int len = 0;
++
++	memset(&cmd, 0, sizeof(cmd));
++#define SUSFS_COMPAT_FEATURE(name, enabled) \
++	if (enabled) \
++		len += scnprintf(cmd.value + len, sizeof(cmd.value) - len, \
++			"CONFIG_KSU_SUSFS_%s\n", name)
++	SUSFS_COMPAT_FEATURE("SUS_PATH", IS_ENABLED(CONFIG_KSU_SUSFS_SUS_PATH));
++	SUSFS_COMPAT_FEATURE("SUS_MOUNT", IS_ENABLED(CONFIG_KSU_SUSFS_SUS_MOUNT));
++	SUSFS_COMPAT_FEATURE("SUS_KSTAT", IS_ENABLED(CONFIG_KSU_SUSFS_SUS_KSTAT));
++	SUSFS_COMPAT_FEATURE("SPOOF_UNAME", IS_ENABLED(CONFIG_KSU_SUSFS_SPOOF_UNAME));
++	SUSFS_COMPAT_FEATURE("ENABLE_LOG", IS_ENABLED(CONFIG_KSU_SUSFS_ENABLE_LOG));
++	SUSFS_COMPAT_FEATURE("HIDE_KSU_SUSFS_SYMBOLS",
++		IS_ENABLED(CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS));
++	SUSFS_COMPAT_FEATURE("SPOOF_CMDLINE_OR_BOOTCONFIG",
++		IS_ENABLED(CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG));
++	SUSFS_COMPAT_FEATURE("OPEN_REDIRECT", IS_ENABLED(CONFIG_KSU_SUSFS_OPEN_REDIRECT));
++#undef SUSFS_COMPAT_FEATURE
++	cmd.err = 0;
++	if (copy_to_user(arg, &cmd, sizeof(cmd)))
++		return -EFAULT;
++	return 0;
++}
++
++static int susfs_compat_handle_command(unsigned int cmd, void __user *arg)
++{
++	int err = SUSFS_COMPAT_ERR_NOT_SUPPORTED;
++
++	if (!arg)
++		return -EFAULT;
++
++	switch (cmd) {
++	case SUSFS_COMPAT_CMD_SHOW_VERSION: {
++		struct susfs_compat_version_cmd out = { .err = 0 };
++		strlcpy(out.value, SUSFS_VERSION, sizeof(out.value));
++		return copy_to_user(arg, &out, sizeof(out)) ? -EFAULT : 0;
++	}
++	case SUSFS_COMPAT_CMD_SHOW_VARIANT: {
++		struct susfs_compat_variant_cmd out = { .err = 0 };
++		strlcpy(out.value, SUSFS_VARIANT, sizeof(out.value));
++		return copy_to_user(arg, &out, sizeof(out)) ? -EFAULT : 0;
++	}
++	case SUSFS_COMPAT_CMD_SHOW_FEATURES:
++		return susfs_compat_show_features(arg);
++	case SUSFS_COMPAT_CMD_PATH: {
++		struct susfs_compat_path_cmd in;
++		err = copy_from_user(&in, arg, sizeof(in)) ? -EFAULT : 0;
++		if (!err) {
++			in.target_pathname[SUSFS_COMPAT_MAX_PATHNAME - 1] = '\0';
++			err = susfs_compat_add_path(in.target_pathname);
++		}
++		if (err > 0)
++			err = -EIO;
++		if (susfs_compat_set_err(arg, offsetof(struct susfs_compat_path_cmd, err),
++				err < 0 ? -err : err))
++			return -EFAULT;
++		return 0;
++	}
++	case SUSFS_COMPAT_CMD_PATH_LOOP:
++		return susfs_compat_set_err(arg,
++			offsetof(struct susfs_compat_path_cmd, err),
++			SUSFS_COMPAT_ERR_NOT_SUPPORTED);
++	case SUSFS_COMPAT_CMD_KSTAT:
++	case SUSFS_COMPAT_CMD_KSTAT_UPDATE:
++	case SUSFS_COMPAT_CMD_KSTAT_STATIC: {
++#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
++		struct susfs_compat_kstat_cmd in;
++		struct st_susfs_sus_kstat info;
++		struct path resolved;
++		int result;
++
++		if (copy_from_user(&in, arg, sizeof(in)))
++			return susfs_compat_set_err(arg,
++				offsetof(struct susfs_compat_kstat_cmd, err), -EFAULT);
++		memset(&info, 0, sizeof(info));
++		in.target_pathname[SUSFS_COMPAT_MAX_PATHNAME - 1] = '\0';
++		strlcpy(info.target_pathname, in.target_pathname,
++			sizeof(info.target_pathname));
++		if (!in.target_ino && !kern_path(info.target_pathname, LOOKUP_FOLLOW,
++				&resolved)) {
++			info.target_ino = d_inode(resolved.dentry)->i_ino;
++			path_put(&resolved);
++		}
++		info.is_statically = (cmd == SUSFS_COMPAT_CMD_KSTAT_STATIC) ? 1 : 0;
++		info.target_ino = in.target_ino ? in.target_ino : info.target_ino;
++		info.spoofed_ino = in.spoofed_ino;
++		info.spoofed_dev = in.spoofed_dev;
++		info.spoofed_nlink = in.spoofed_nlink;
++		info.spoofed_size = in.spoofed_size;
++		info.spoofed_atime_tv_sec = in.spoofed_atime_tv_sec;
++		info.spoofed_atime_tv_nsec = in.spoofed_atime_tv_nsec;
++		info.spoofed_mtime_tv_sec = in.spoofed_mtime_tv_sec;
++		info.spoofed_mtime_tv_nsec = in.spoofed_mtime_tv_nsec;
++		info.spoofed_ctime_tv_sec = in.spoofed_ctime_tv_sec;
++		info.spoofed_ctime_tv_nsec = in.spoofed_ctime_tv_nsec;
++		info.spoofed_blocks = in.spoofed_blocks;
++		info.spoofed_blksize = in.spoofed_blksize;
++#if defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_COMPAT_STAT64)
++#ifdef CONFIG_MIPS
++		info.spoofed_dev = new_decode_dev(info.spoofed_dev);
++#else
++		info.spoofed_dev = huge_decode_dev(info.spoofed_dev);
++#endif
++#else
++		info.spoofed_dev = old_decode_dev(info.spoofed_dev);
++#endif
++		if (cmd == SUSFS_COMPAT_CMD_KSTAT_UPDATE)
++			result = susfs_compat_update_kstat(&info, in.flags);
++		else
++			result = susfs_compat_store_kstat(&info);
++		if (result > 0)
++			result = -EIO;
++		return susfs_compat_set_err(arg,
++			offsetof(struct susfs_compat_kstat_cmd, err), result < 0 ? -result : 0);
++#else
++		return susfs_compat_set_err(arg,
++			offsetof(struct susfs_compat_kstat_cmd, err), err);
++#endif
++	}
++	case SUSFS_COMPAT_CMD_OPEN_REDIRECT: {
++#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
++		struct susfs_compat_open_redirect_cmd in;
++		int result;
++
++		if (copy_from_user(&in, arg, sizeof(in)))
++			return susfs_compat_set_err(arg,
++				offsetof(struct susfs_compat_open_redirect_cmd, err), -EFAULT);
++		in.target_pathname[SUSFS_COMPAT_MAX_PATHNAME - 1] = '\0';
++		in.redirected_pathname[SUSFS_COMPAT_MAX_PATHNAME - 1] = '\0';
++		if (in.uid_scheme != SUSFS_COMPAT_OPEN_REDIRECT_UID_SCHEME)
++			result = -SUSFS_COMPAT_ERR_NOT_SUPPORTED;
++		else
++			result = susfs_compat_store_open_redirect(in.target_pathname,
++				in.redirected_pathname);
++		if (result > 0)
++			result = -EIO;
++		return susfs_compat_set_err(arg,
++			offsetof(struct susfs_compat_open_redirect_cmd, err),
++			result < 0 ? -result : 0);
++#else
++		return susfs_compat_set_err(arg,
++			offsetof(struct susfs_compat_open_redirect_cmd, err), err);
++#endif
++	}
++	case SUSFS_COMPAT_CMD_UNAME:
++		err = susfs_compat_set_uname(arg);
++		return susfs_compat_set_err(arg,
++			offsetof(struct susfs_compat_uname_cmd, err),
++			err < 0 ? -err : 0);
++	case SUSFS_COMPAT_CMD_LOG: {
++#ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
++		struct susfs_compat_toggle_cmd in;
++		if (copy_from_user(&in, arg, sizeof(in)))
++			err = -EFAULT;
++		else {
++			susfs_set_log(in.enabled != 0);
++			err = 0;
++		}
++#endif
++		return susfs_compat_set_err(arg,
++			offsetof(struct susfs_compat_toggle_cmd, err),
++			err < 0 ? -err : err);
++	}
++	case SUSFS_COMPAT_CMD_CMDLINE:
++#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
++		err = susfs_set_cmdline_or_bootconfig((char __user *)arg);
++#endif
++		return susfs_compat_set_err(arg,
++			offsetof(struct susfs_compat_cmdline_cmd, err),
++			err < 0 ? -err : err);
++	case SUSFS_COMPAT_CMD_HIDE_MOUNTS:
++	case SUSFS_COMPAT_CMD_AVC_LOG:
++		return susfs_compat_set_err(arg, sizeof(__u32), err);
++	case SUSFS_COMPAT_CMD_MAP:
++		return susfs_compat_set_err(arg, SUSFS_COMPAT_MAX_PATHNAME, err);
++	default:
++		return 0;
++	}
++}
++
++int susfs_handle_reboot(int magic1, int magic2, unsigned int cmd,
++		void __user *arg)
++{
++	if ((unsigned int)magic1 != SUSFS_COMPAT_MAGIC1 ||
++		(unsigned int)magic2 != SUSFS_COMPAT_MAGIC2)
++		return 0;
++	if (current_uid().val != 0)
++		return 0;
++	susfs_compat_handle_command(cmd, arg);
++	return 1;
++}

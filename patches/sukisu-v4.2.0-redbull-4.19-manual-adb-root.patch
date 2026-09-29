@@ -1,0 +1,41 @@
+diff --git a/kernel/feature/adb_root.c b/kernel/feature/adb_root.c
+--- a/kernel/feature/adb_root.c
++++ b/kernel/feature/adb_root.c
+@@ -195,6 +195,37 @@
+     return 0;
+ }
+ 
++/* The MANUAL_HOOK path never enters syscall_event_bridge.c. */
++long ksu_adb_root_handle_execve_manual(const char *filename,
++				       unsigned long *envp_p)
++{
++	static const char adbd_suffix[] = "/adbd";
++	size_t len;
++	long ret;
++
++	if (!static_branch_unlikely(&ksu_adb_root) ||
++	    !is_init(current_cred()) || !filename || !envp_p)
++		return 0;
++
++	len = strlen(filename);
++	if (len < sizeof(adbd_suffix) - 1 ||
++	    strcmp(filename + len - (sizeof(adbd_suffix) - 1), adbd_suffix))
++		return 0;
++
++	if (is_libadbroot_ok() != 1)
++		return 0;
++
++	ret = setup_ld_preload(current_pt_regs(), envp_p);
++	if (ret) {
++		pr_err("Manual ADB root preload failed: %ld\n", ret);
++		return ret;
++	}
++
++	escape_to_root_for_adb_root();
++	pr_info("Manual ADB root prepared for %s\n", filename);
++	return 1;
++}
++
+ static int kernel_adb_root_feature_get(u64 *value)
+ {
+     *value = static_key_enabled(&ksu_adb_root) ? 1 : 0;

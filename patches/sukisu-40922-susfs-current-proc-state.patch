@@ -1,0 +1,20 @@
+diff --git a/kernel/supercalls.c b/kernel/supercalls.c
+--- a/kernel/supercalls.c
++++ b/kernel/supercalls.c
+@@ -531,11 +531,11 @@
+ 		cmd.result = (u32)ret;
+ 		break;
+ #else
+-        if (susfs_is_current_proc_umounted()) {
+-            ret = 0; // SYSCALL_TRACEPOINT is NOT flagged
+-        } else {
+-            ret = 1; // SYSCALL_TRACEPOINT is flagged
+-        }
++		if (ksu_susfs_is_current_proc_umounted()) {
++			ret = 0; // SYSCALL_TRACEPOINT is NOT flagged
++		} else {
++			ret = 1; // SYSCALL_TRACEPOINT is flagged
++		}
+         pr_info("manage_mark: ret for pid %d: %d\n", cmd.pid, ret);
+         cmd.result = (u32)ret;
+         break;

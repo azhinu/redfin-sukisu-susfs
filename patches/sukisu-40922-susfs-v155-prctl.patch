@@ -1,0 +1,234 @@
+diff --git a/kernel/setuid_hook.c b/kernel/setuid_hook.c
+--- a/kernel/setuid_hook.c
++++ b/kernel/setuid_hook.c
+@@ -17,6 +17,7 @@
+ 
+ #ifdef CONFIG_KSU_SUSFS
+ #include <linux/susfs.h>
++#include "susfs_v155.h"
+ #endif // #ifdef CONFIG_KSU_SUSFS
+ 
+ #include "allowlist.h"
+@@ -46,12 +47,6 @@
+ }
+ 
+ extern u32 susfs_zygote_sid;
+-#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+-extern void susfs_run_sus_path_loop(uid_t uid);
+-#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH
+-#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+-extern void susfs_reorder_mnt_id(void);
+-#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+ #endif // #ifdef CONFIG_KSU_SUSFS
+ 
+ static void ksu_install_manager_fd_tw_func(struct callback_head *cb)
+@@ -179,16 +174,7 @@
+ 	// Handle kernel umount
+ 	ksu_handle_umount(old_uid, new_uid);
+ 
+-#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+-	// We can reorder the mnt_id now after all sus mounts are umounted
+-	susfs_reorder_mnt_id();
+-#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+-
+-#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+-	susfs_run_sus_path_loop(new_uid);
+-#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH
+-
+-	susfs_set_current_proc_umounted();
++	ksu_susfs_set_current_proc_umounted();
+ 
+ 	return 0;
+ }
+diff --git a/kernel/sucompat.c b/kernel/sucompat.c
+--- a/kernel/sucompat.c
++++ b/kernel/sucompat.c
+@@ -18,6 +18,7 @@
+ #ifdef CONFIG_KSU_SUSFS
+ #include <linux/susfs_def.h>
+ #include <linux/namei.h>
++#include "susfs_v155.h"
+ #include "selinux/selinux.h"
+ #include "objsec.h"
+ #endif // #ifdef CONFIG_KSU_SUSFS
+@@ -121,7 +122,7 @@
+ 				strstr(filename->name, "/adbd") == NULL)) {
+ 			pr_info("hook_manager: unmark %d exec %s\n",
+ 				current->pid, filename->name);
+-			susfs_set_current_proc_umounted();
++			ksu_susfs_set_current_proc_umounted();
+ 		}
+ #endif
+ 	}
+diff --git a/kernel/supercalls.c b/kernel/supercalls.c
+--- a/kernel/supercalls.c
++++ b/kernel/supercalls.c
+@@ -19,6 +19,7 @@
+ #ifdef CONFIG_KSU_SUSFS
+ #include <linux/namei.h>
+ #include <linux/susfs.h>
++#include "susfs_v155.h"
+ #endif // #ifdef CONFIG_KSU_SUSFS
+ 
+ #include "supercalls.h"
+@@ -58,6 +59,135 @@
+ {
+ 	return current_uid().val == 0;
+ }
++
++#ifdef CONFIG_KSU_SUSFS
++static int ksu_susfs_reply(unsigned long error_pointer, int result)
++{
++	if (!error_pointer)
++		return -EFAULT;
++
++	return put_user(result, (int __user *)error_pointer) ? -EFAULT : 0;
++}
++
++static int ksu_susfs_copy_reply(unsigned long data, const void *source,
++				size_t size, unsigned long error_pointer)
++{
++	int result;
++
++	if (!data)
++		return -EFAULT;
++
++	result = copy_to_user((void __user *)data, source, size) ? -EFAULT : 0;
++	return ksu_susfs_reply(error_pointer, result);
++}
++
++int ksu_handle_susfs_prctl(int option, unsigned long command,
++			   unsigned long data, unsigned long error_pointer)
++{
++	int result = -1;
++
++	if (option != KSU_SUSFS_PRCTL_OPTION)
++		return -ENOSYS;
++	if (current_uid().val != 0)
++		return -EPERM;
++	if (!error_pointer || put_user(-1, (int __user *)error_pointer))
++		return -EFAULT;
++
++	switch (command) {
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++	case CMD_SUSFS_ADD_SUS_PATH:
++		result = susfs_add_sus_path(
++			(struct st_susfs_sus_path __user *)data);
++		break;
++#endif
++#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
++	case CMD_SUSFS_ADD_SUS_MOUNT:
++		result = susfs_add_sus_mount(
++			(struct st_susfs_sus_mount __user *)data);
++		break;
++#endif
++#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
++	case CMD_SUSFS_ADD_SUS_KSTAT:
++	case CMD_SUSFS_ADD_SUS_KSTAT_STATICALLY:
++		result = susfs_add_sus_kstat(
++			(struct st_susfs_sus_kstat __user *)data);
++		break;
++	case CMD_SUSFS_UPDATE_SUS_KSTAT:
++		result = susfs_update_sus_kstat(
++			(struct st_susfs_sus_kstat __user *)data);
++		break;
++#endif
++#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
++	case CMD_SUSFS_SET_UNAME:
++		result = susfs_set_uname((struct st_susfs_uname __user *)data);
++		break;
++#endif
++#ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
++	case CMD_SUSFS_ENABLE_LOG:
++		if (data == 0 || data == 1) {
++			susfs_set_log(data);
++			result = 0;
++		} else {
++			result = -EINVAL;
++		}
++		break;
++#endif
++#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
++	case CMD_SUSFS_SET_CMDLINE_OR_BOOTCONFIG:
++		result = susfs_set_cmdline_or_bootconfig((char __user *)data);
++		break;
++#endif
++#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
++	case CMD_SUSFS_ADD_OPEN_REDIRECT:
++		result = susfs_add_open_redirect(
++			(struct st_susfs_open_redirect __user *)data);
++		break;
++#endif
++	case CMD_SUSFS_SHOW_VERSION:
++		return ksu_susfs_copy_reply(data, SUSFS_VERSION,
++					    sizeof(SUSFS_VERSION),
++					    error_pointer);
++	case CMD_SUSFS_SHOW_VARIANT:
++		return ksu_susfs_copy_reply(data, SUSFS_VARIANT,
++					    sizeof(SUSFS_VARIANT),
++					    error_pointer);
++	case CMD_SUSFS_SHOW_ENABLED_FEATURES: {
++		unsigned long features = 0;
++
++#ifdef CONFIG_KSU_SUSFS_SUS_PATH
++		features |= BIT(0);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
++		features |= BIT(1);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
++		features |= BIT(4);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
++		features |= BIT(8);
++#endif
++#ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
++		features |= BIT(9);
++#endif
++#ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
++		features |= BIT(10);
++#endif
++#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
++		features |= BIT(11);
++#endif
++#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
++		features |= BIT(12);
++#endif
++		return ksu_susfs_copy_reply(data, &features, sizeof(features),
++					    error_pointer);
++	}
++	default:
++		break;
++	}
++
++	return ksu_susfs_reply(error_pointer, result);
++}
++#endif
+ 
+ bool manager_or_root(void)
+ {
+diff --git a/kernel/susfs_v155.h b/kernel/susfs_v155.h
+new file mode 100644
+--- /dev/null
++++ b/kernel/susfs_v155.h
+@@ -0,0 +1,20 @@
++#ifndef __KSU_SUSFS_V155_H
++#define __KSU_SUSFS_V155_H
++
++#include <linux/sched.h>
++
++/* SUSFS v1.5.5 userspace submits commands through prctl(2). */
++#define KSU_SUSFS_PRCTL_OPTION 0xDEADBEEF
++
++static inline bool ksu_susfs_is_current_proc_umounted(void)
++{
++	return !!(current->susfs_task_state &
++		  TASK_STRUCT_NON_ROOT_USER_APP_PROC);
++}
++
++static inline void ksu_susfs_set_current_proc_umounted(void)
++{
++	current->susfs_task_state |= TASK_STRUCT_NON_ROOT_USER_APP_PROC;
++}
++
++#endif

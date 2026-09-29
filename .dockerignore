@@ -1,0 +1,14 @@
+# Build trees and generated output.
+.git/
+deps/
+artifacts/
+*.img
+*.zip
+*.log
+__pycache__/
+.pytest_cache/
+
+# Local Docker and editor state.
+.docker/
+.DS_Store
+mcp_docker.log

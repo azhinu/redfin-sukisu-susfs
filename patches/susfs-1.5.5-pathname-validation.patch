@@ -1,0 +1,106 @@
+diff --git a/fs/susfs.c b/fs/susfs.c
+--- a/fs/susfs.c
++++ b/fs/susfs.c
+@@ -13,8 +13,14 @@
+ #include <linux/version.h>
+ #include <linux/fdtable.h>
+ #include <linux/statfs.h>
++#include <linux/string.h>
+ #include <linux/susfs.h>
+ #include "mount.h"
++
++static bool susfs_has_terminated_string(const char *value, size_t size)
++{
++	return memchr(value, '\0', size) != NULL;
++}
+ 
+ static spinlock_t susfs_spin_lock;
+ 
+@@ -90,6 +96,12 @@
+ 		return 1;
+ 	}
+ 
++	if (!susfs_has_terminated_string(info.target_pathname,
++					 sizeof(info.target_pathname))) {
++		SUSFS_LOGE("Target pathname is not NUL-terminated.\n");
++		return -EINVAL;
++	}
++
+ 	spin_lock(&susfs_spin_lock);
+ 	hash_for_each_safe(SUS_PATH_HLIST, bkt, tmp_node, tmp_entry, node) {
+ 	if (!strcmp(tmp_entry->target_pathname, info.target_pathname)) {
+@@ -109,6 +121,8 @@
+ 
+ 	new_entry->target_ino = info.target_ino;
+ 	strncpy(new_entry->target_pathname, info.target_pathname, SUSFS_MAX_LEN_PATHNAME-1);
++	new_entry->target_pathname[sizeof(new_entry->target_pathname) - 1] =
++		'\0';
+ 	if (susfs_update_sus_path_inode(new_entry->target_pathname)) {
+ 		kfree(new_entry);
+ 		return 1;
+@@ -189,6 +203,12 @@
+ 		return 1;
+ 	}
+ 
++	if (!susfs_has_terminated_string(info.target_pathname,
++					 sizeof(info.target_pathname))) {
++		SUSFS_LOGE("Target pathname is not NUL-terminated.\n");
++		return -EINVAL;
++	}
++
+ #if defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_COMPAT_STAT64)
+ #ifdef CONFIG_MIPS
+ 	info.target_dev = new_decode_dev(info.target_dev);
+@@ -349,6 +369,12 @@
+ 	if (copy_from_user(&info, user_info, sizeof(info))) {
+ 		SUSFS_LOGE("failed copying from userspace\n");
+ 		return 1;
++	}
++
++	if (!susfs_has_terminated_string(info.target_pathname,
++					 sizeof(info.target_pathname))) {
++		SUSFS_LOGE("Target pathname is not NUL-terminated.\n");
++		return -EINVAL;
+ 	}
+ 
+ 	if (strlen(info.target_pathname) == 0) {
+@@ -444,6 +470,12 @@
+ 	if (copy_from_user(&info, user_info, sizeof(info))) {
+ 		SUSFS_LOGE("failed copying from userspace\n");
+ 		return 1;
++	}
++
++	if (!susfs_has_terminated_string(info.target_pathname,
++					 sizeof(info.target_pathname))) {
++		SUSFS_LOGE("Target pathname is not NUL-terminated.\n");
++		return -EINVAL;
+ 	}
+ 
+ 	spin_lock(&susfs_spin_lock);
+@@ -789,6 +821,14 @@
+ 		return 1;
+ 	}
+ 
++	if (!susfs_has_terminated_string(info.target_pathname,
++					 sizeof(info.target_pathname)) ||
++	    !susfs_has_terminated_string(info.redirected_pathname,
++					 sizeof(info.redirected_pathname))) {
++		SUSFS_LOGE("Open redirect pathname is not NUL-terminated.\n");
++		return -EINVAL;
++	}
++
+ 	spin_lock(&susfs_spin_lock);
+ 	hash_for_each_safe(OPEN_REDIRECT_HLIST, bkt, tmp_node, tmp_entry, node) {
+ 		if (!strcmp(tmp_entry->target_pathname, info.target_pathname)) {
+@@ -808,7 +848,11 @@
+ 
+ 	new_entry->target_ino = info.target_ino;
+ 	strncpy(new_entry->target_pathname, info.target_pathname, SUSFS_MAX_LEN_PATHNAME-1);
++	new_entry->target_pathname[sizeof(new_entry->target_pathname) - 1] =
++		'\0';
+ 	strncpy(new_entry->redirected_pathname, info.redirected_pathname, SUSFS_MAX_LEN_PATHNAME-1);
++	new_entry->redirected_pathname[sizeof(new_entry->redirected_pathname) -
++				       1] = '\0';
+ 	if (susfs_update_open_redirect_inode(new_entry)) {
+ 		SUSFS_LOGE("failed adding path '%s' to OPEN_REDIRECT_HLIST\n", new_entry->target_pathname);
+ 		kfree(new_entry);

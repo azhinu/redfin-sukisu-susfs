@@ -1,0 +1,24 @@
+diff --git a/kernel/hook/arm64/patch_memory.c b/kernel/hook/arm64/patch_memory.c
+--- a/kernel/hook/arm64/patch_memory.c
++++ b/kernel/hook/arm64/patch_memory.c
+@@ -147,13 +147,13 @@
+     void *map = set_fixmap_offset(FIX_TEXT_POKE0, phy);
+     pr_debug("fixmap addr for patch 0x%lx: 0x%lx\n", p, (unsigned long)map);
+ 
+-    ret = (int)copy_to_kernel_nofault(map, src, len);
+-
+-    clear_fixmap(FIX_TEXT_POKE0);
+-
+-    if (!ret) {
+-        if (flags & KSU_PATCH_TEXT_FLUSH_ICACHE)
+-            ksu_flush_icache((uintptr_t)dst, (uintptr_t)dst + len);
++	ret = (int)probe_kernel_write(map, src, len);
++
++	clear_fixmap(FIX_TEXT_POKE0);
++
++	if (!ret) {
++		if (flags & KSU_PATCH_TEXT_FLUSH_ICACHE)
++			ksu_flush_icache((uintptr_t)dst, (uintptr_t)dst + len);
+         if (flags & KSU_PATCH_TEXT_FLUSH_DCACHE)
+             ksu_flush_dcache(dst, len);
+     }

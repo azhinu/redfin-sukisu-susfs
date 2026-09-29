@@ -1,0 +1,224 @@
+diff --git a/fs/namei.c b/fs/namei.c
+--- a/fs/namei.c
++++ b/fs/namei.c
+@@ -2500,6 +2500,7 @@
+ 	    unlikely(path->dentry->d_inode->i_state & INODE_STATE_SUS_PATH) &&
+ 	    likely(current->susfs_task_state &
+ 		   TASK_STRUCT_NON_ROOT_USER_APP_PROC)) {
++		path_put(path);
+ 		putname(name);
+ 		return -ENOENT;
+ 	}
+diff --git a/fs/mount.h b/fs/mount.h
+--- a/fs/mount.h
++++ b/fs/mount.h
+@@ -90,6 +90,11 @@
+ 	return !IS_ERR_OR_NULL(real_mount(mnt)->mnt_ns);
+ }
+ 
++#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
++extern struct vfsmount *susfs_get_visible_mnt(struct vfsmount *mnt,
++					      int *mnt_id);
++#endif
++
+ extern struct mount *__lookup_mnt(struct vfsmount *, struct dentry *);
+ 
+ extern int __legitimize_mnt(struct vfsmount *, unsigned);
+diff --git a/fs/namespace.c b/fs/namespace.c
+--- a/fs/namespace.c
++++ b/fs/namespace.c
+@@ -1402,6 +1402,36 @@
+ 	return mnt;
+ }
+ EXPORT_SYMBOL(mntget);
++
++#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
++/* Return a referenced visible ancestor, or -ENOENT for a detached hidden mount. */
++struct vfsmount *susfs_get_visible_mnt(struct vfsmount *mnt, int *mnt_id)
++{
++	struct mount *visible;
++	struct vfsmount *result = ERR_PTR(-ENOENT);
++
++	if (!mnt)
++		return result;
++
++	visible = real_mount(mnt);
++	read_seqlock_excl(&mount_lock);
++	while (visible->mnt_id >= DEFAULT_SUS_MNT_ID) {
++		if (!mnt_has_parent(visible)) {
++			visible = NULL;
++			break;
++		}
++		visible = visible->mnt_parent;
++	}
++	if (visible) {
++		if (mnt_id)
++			*mnt_id = visible->mnt_id;
++		result = mntget(&visible->mnt);
++	}
++	read_sequnlock_excl(&mount_lock);
++
++	return result;
++}
++#endif
+ 
+ /* path_is_mountpoint() - Check if path is a mount in the current
+  *                          namespace.
+diff --git a/fs/proc/fd.c b/fs/proc/fd.c
+--- a/fs/proc/fd.c
++++ b/fs/proc/fd.c
+@@ -13,6 +13,7 @@
+ 
+ #include <linux/proc_fs.h>
+ #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
++#include <linux/err.h>
+ #include <linux/susfs_def.h>
+ #endif
+ 
+@@ -27,7 +28,8 @@
+ 	struct file *file = NULL;
+ 	struct task_struct *task;
+ #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+-	struct mount *mnt = NULL;
++	struct vfsmount *visible;
++	int mnt_id;
+ #endif
+ 
+ 	task = get_proc_task(m->private);
+@@ -60,16 +62,19 @@
+ 		return ret;
+ 
+ #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+-	mnt = real_mount(file->f_path.mnt);
+ 	if (likely(current->susfs_task_state &
+-		   TASK_STRUCT_NON_ROOT_USER_APP_PROC) &&
+-	    mnt->mnt_id >= DEFAULT_SUS_MNT_ID) {
+-		for (; mnt->mnt_id >= DEFAULT_SUS_MNT_ID;
+-		     mnt = mnt->mnt_parent) {
++		   TASK_STRUCT_NON_ROOT_USER_APP_PROC)) {
++		visible = susfs_get_visible_mnt(file->f_path.mnt, &mnt_id);
++		if (IS_ERR(visible)) {
++			ret = PTR_ERR(visible);
++			goto out;
+ 		}
++		mntput(visible);
++	} else {
++		mnt_id = real_mount(file->f_path.mnt)->mnt_id;
+ 	}
+ 	seq_printf(m, "pos:\t%lli\nflags:\t0%o\nmnt_id:\t%i\n",
+-		   (long long)file->f_pos, f_flags, mnt->mnt_id);
++		   (long long)file->f_pos, f_flags, mnt_id);
+ #else
+ 	seq_printf(m, "pos:\t%lli\nflags:\t0%o\nmnt_id:\t%i\n",
+ 		   (long long)file->f_pos, f_flags,
+@@ -85,7 +90,7 @@
+ 
+ out:
+ 	fput(file);
+-	return 0;
++	return ret;
+ }
+ 
+ static int seq_fdinfo_open(struct inode *inode, struct file *file)
+diff --git a/fs/statfs.c b/fs/statfs.c
+--- a/fs/statfs.c
++++ b/fs/statfs.c
+@@ -10,6 +10,7 @@
+ #include <linux/uaccess.h>
+ #include <linux/compat.h>
+ #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
++#include <linux/err.h>
+ #include <linux/susfs_def.h>
+ #include "mount.h"
+ #endif
+@@ -75,25 +76,28 @@
+ {
+ 	int error;
+ #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+-	struct mount *mnt;
+-
+-	mnt = real_mount(path->mnt);
++	struct vfsmount *visible;
++	struct dentry *dentry;
++
+ 	if (likely(current->susfs_task_state &
+ 		   TASK_STRUCT_NON_ROOT_USER_APP_PROC)) {
+-		for (; mnt->mnt_id >= DEFAULT_SUS_MNT_ID;
+-		     mnt = mnt->mnt_parent) {
+-		}
+-	}
+-	error = statfs_by_dentry(mnt->mnt.mnt_root, buf);
+-	if (!error)
+-		buf->f_flags = calculate_f_flags(&mnt->mnt);
+-	return error;
+-#else
++		visible = susfs_get_visible_mnt(path->mnt, NULL);
++		if (IS_ERR(visible))
++			return PTR_ERR(visible);
++		/* Preserve the original dentry unless the mount was redirected. */
++		dentry =
++			visible == path->mnt ? path->dentry : visible->mnt_root;
++		error = statfs_by_dentry(dentry, buf);
++		if (!error)
++			buf->f_flags = calculate_f_flags(visible);
++		mntput(visible);
++		return error;
++	}
++#endif
+ 	error = statfs_by_dentry(path->dentry, buf);
+ 	if (!error)
+ 		buf->f_flags = calculate_f_flags(path->mnt);
+ 	return error;
+-#endif
+ }
+ EXPORT_SYMBOL(vfs_statfs);
+ 
+@@ -269,6 +273,7 @@
+ 
+ #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+ 	if (unlikely(s->s_root->d_inode->i_state & INODE_STATE_SUS_MOUNT)) {
++		drop_super(s);
+ 		return -EINVAL;
+ 	}
+ #endif
+diff --git a/fs/notify/fdinfo.c b/fs/notify/fdinfo.c
+--- a/fs/notify/fdinfo.c
++++ b/fs/notify/fdinfo.c
+@@ -14,6 +14,7 @@
+ #include <linux/proc_fs.h>
+ #include <linux/exportfs.h>
+ #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
++#include <linux/err.h>
+ #include <linux/susfs_def.h>
+ #endif
+ 
+@@ -113,7 +114,7 @@
+ 				goto out_seq_printf;
+ 			}
+ 			dpath = d_path(&file->f_path, pathname, PAGE_SIZE);
+-			if (!dpath) {
++			if (IS_ERR_OR_NULL(dpath)) {
+ 				goto out_free_pathname;
+ 			}
+ 			if (kern_path(dpath, 0, &path)) {
+diff --git a/fs/susfs.c b/fs/susfs.c
+--- a/fs/susfs.c
++++ b/fs/susfs.c
+@@ -1,5 +1,6 @@
+ #include <linux/version.h>
+ #include <linux/cred.h>
++#include <linux/err.h>
+ #include <linux/fs.h>
+ #include <linux/slab.h>
+ #include <linux/seq_file.h>
+@@ -660,8 +661,8 @@
+ 	}
+ 
+ 	dpath = d_path(path, pathname, PAGE_SIZE);
+-	if (!dpath) {
+-		SUSFS_LOGE("dpath is NULL\n");
++	if (IS_ERR_OR_NULL(dpath)) {
++		SUSFS_LOGE("Failed to resolve d_path().\n");
+ 		goto out_free_pathname;
+ 	}
+ 

@@ -1,0 +1,17 @@
+diff --git a/kernel/nsproxy.c b/kernel/nsproxy.c
+--- a/kernel/nsproxy.c
++++ b/kernel/nsproxy.c
+@@ -270,6 +270,13 @@
+ 	return err;
+ }
+ 
++/* Export the 4.19 syscall body for in-kernel SukiSU namespace setup. */
++long ksu_setns(int fd, int nstype)
++{
++	return __do_sys_setns(fd, nstype);
++}
++EXPORT_SYMBOL_GPL(ksu_setns);
++
+ int __init nsproxy_cache_init(void)
+ {
+ 	nsproxy_cachep = KMEM_CACHE(nsproxy, SLAB_PANIC);

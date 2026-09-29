@@ -1,0 +1,2 @@
+# Diff context includes a mandatory leading space; lint additions separately.
+*.patch whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab

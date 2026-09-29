@@ -1,0 +1,76 @@
+[submodule "build"]
+	path = deps/build
+	url = https://android.googlesource.com/kernel/build
+	shallow = true
+[submodule "kernel"]
+	path = deps/kernel
+	url = https://android.googlesource.com/kernel/msm
+	shallow = true
+[submodule "misc"]
+	path = deps/misc
+	url = https://android.googlesource.com/platform/prebuilts/misc
+	shallow = true
+[submodule "mkbootimg"]
+	path = deps/mkbootimg
+	url = https://android.googlesource.com/platform/system/tools/mkbootimg
+	shallow = true
+[submodule "build-tools"]
+	path = deps/build-tools
+	url = https://android.googlesource.com/platform/prebuilts/build-tools
+	shallow = true
+[submodule "kernel-build-tools"]
+	path = deps/kernel-build-tools
+	url = https://android.googlesource.com/kernel/prebuilts/build-tools
+	shallow = true
+[submodule "gas"]
+	path = deps/gas
+	url = https://android.googlesource.com/platform/prebuilts/gas/linux-x86
+	shallow = true
+[submodule "audio"]
+	path = deps/audio
+	url = https://android.googlesource.com/kernel/msm-extra
+	shallow = true
+[submodule "camera"]
+	path = deps/camera
+	url = https://android.googlesource.com/kernel/msm-extra/camera-kernel
+	shallow = true
+[submodule "dataipa"]
+	path = deps/dataipa
+	url = https://android.googlesource.com/kernel/msm-extra/dataipa
+	shallow = true
+[submodule "display"]
+	path = deps/display
+	url = https://android.googlesource.com/kernel/msm-extra/display-drivers
+	shallow = true
+[submodule "video"]
+	path = deps/video
+	url = https://android.googlesource.com/kernel/msm-extra/video-driver
+	shallow = true
+[submodule "clang"]
+	path = deps/clang
+	url = https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86
+	shallow = true
+[submodule "devicetree"]
+	path = deps/devicetree
+	url = https://android.googlesource.com/kernel/msm-extra/devicetree
+	shallow = true
+[submodule "camera-devicetree"]
+	path = deps/camera-devicetree
+	url = https://android.googlesource.com/kernel/msm-extra/camera-devicetree
+	shallow = true
+[submodule "display-devicetree"]
+	path = deps/display-devicetree
+	url = https://android.googlesource.com/kernel/msm-extra/display-devicetree
+	shallow = true
+[submodule "sukisu"]
+	path = deps/sukisu
+	url = https://github.com/SukiSU-Ultra/SukiSU-Ultra.git
+	shallow = true
+[submodule "susfs"]
+	path = deps/susfs
+	url = https://gitlab.com/simonpunk/susfs4ksu.git
+	shallow = true
+[submodule "anykernel"]
+	path = deps/anykernel
+	url = https://github.com/osm0sis/AnyKernel3.git
+	shallow = true
